@@ -3,23 +3,46 @@
   const socket = io("http://localhost:4000");
   const playerId = new URLSearchParams(location.search).get("playerId") || "player_1";
   let conversationId;
+  let lastMessageId; // highest message id this client has already seen
 
-  socket.emit("join", { playerId }, (res) => {
-    conversationId = res.conversationId;
-    console.log("joined as", playerId, "-> conversation", conversationId, "status:", res.status);
+  // "connect" fires on the very first connection AND every automatic
+  // reconnect, so joining here (instead of once at the top) is what makes
+  // reconnection replay actually happen.
+  socket.on("connect", () => {
+    console.log(`connected (${socket.id}) - joining with lastMessageId=${lastMessageId}`);
+    socket.emit("join", { playerId, lastMessageId }, (res) => {
+      conversationId = res.conversationId;
+      console.log("joined as", playerId, "-> conversation", conversationId, "status:", res.status);
+    });
   });
 
   socket.on("history", (messages) => {
-    console.log(`--- history (${messages.length} messages) ---`);
-    messages.forEach((m) => console.log(`[${m.created_at}] ${m.sender_type}:`, m.body));
-    console.log("--- end history ---");
+    const label = lastMessageId ? "missed messages (reconnect replay)" : "history";
+    console.log(`--- ${label}: ${messages.length} ---`);
+    messages.forEach((m) => {
+      console.log(`[${m.created_at}] ${m.sender_type}:`, m.body);
+      if (!lastMessageId || m.id > lastMessageId) lastMessageId = m.id;
+    });
+    console.log(`--- end ${label} ---`);
   });
 
-  socket.on("message", (m) => console.log("received:", m.body));  // print incoming
+  socket.on("message", (m) => {
+    console.log("received:", m.body);
+    if (!lastMessageId || m.id > lastMessageId) lastMessageId = m.id;
+  });
 
   function send(text) {
     socket.emit("message", {
       conversationId, senderType: "customer", senderId: playerId, body: text
     }, (res) => console.log("server ack:", res.ok));
+  }
+
+  // Test helpers to simulate a dropped connection without touching the network.
+  function simulateDisconnect() {
+    socket.disconnect();
+    console.log("manually disconnected - lastMessageId frozen at", lastMessageId);
+  }
+  function reconnect() {
+    socket.connect();
   }
 </script>

@@ -10,7 +10,7 @@ io.on("connection", (socket) => {
   console.log("someone connected:", socket.id);
 
   // A client asks to join — create a new conversation, or resume an existing one.
-  socket.on("join", async ({ playerId }, ack) => {
+  socket.on("join", async ({ playerId, lastMessageId }, ack) => {
     try {
       // PLACEHOLDER — signed-token verification goes here later.
       // The tech team will pass a signed token instead of a raw playerId (see
@@ -36,11 +36,18 @@ io.on("connection", (socket) => {
 
       socket.join(`conv_${conversation.id}`);
 
-      // Send this client the existing thread, oldest first, so it can render history.
-      const history = await pool.query(
-        `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
-        [conversation.id]
-      );
+      // Catch this client up, oldest first. A fresh join has no lastMessageId,
+      // so it gets the whole thread. A reconnect sends the id of the last
+      // message it already has, so it only gets what it missed while away.
+      const history = lastMessageId
+        ? await pool.query(
+            `SELECT * FROM messages WHERE conversation_id = $1 AND id > $2 ORDER BY created_at ASC`,
+            [conversation.id, lastMessageId]
+          )
+        : await pool.query(
+            `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+            [conversation.id]
+          );
       socket.emit("history", history.rows);
 
       if (ack) ack({ ok: true, conversationId: conversation.id, status: conversation.status });
