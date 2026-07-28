@@ -1,11 +1,19 @@
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
   const socket = io("http://localhost:4000");
-  socket.emit("join", { conversationId: 1 });          // join conversation 1
+  const playerId = new URLSearchParams(location.search).get("playerId") || "player_1";
+  let conversationId;
+
+  socket.emit("join", { playerId }, (res) => {
+    conversationId = res.conversationId;
+    console.log("joined as", playerId, "-> conversation", conversationId, "status:", res.status);
+  });
+
   socket.on("message", (m) => console.log("received:", m.body));  // print incoming
+
   function send(text) {
     socket.emit("message", {
-      conversationId: 1, senderType: "customer", senderId: "test", body: text
+      conversationId, senderType: "customer", senderId: playerId, body: text
     }, (res) => console.log("server ack:", res.ok));
   }
 </script>
