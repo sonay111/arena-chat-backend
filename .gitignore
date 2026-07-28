@@ -32,3 +32,11 @@ coverage/
 
 # TypeScript incremental cache
 *.tsbuildinfo
+
+# Internal docs (contains a live secret API token) - never commit
+/docs/
+
+# Local-only guide files (not for GitHub) - CLAUDE.md is intentionally NOT listed here, it stays tracked
+/chat-build-guide.md
+/master-build-guide.md
+/self-built-chat-plan.md
