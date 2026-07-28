@@ -9,6 +9,12 @@
     console.log("joined as", playerId, "-> conversation", conversationId, "status:", res.status);
   });
 
+  socket.on("history", (messages) => {
+    console.log(`--- history (${messages.length} messages) ---`);
+    messages.forEach((m) => console.log(`[${m.created_at}] ${m.sender_type}:`, m.body));
+    console.log("--- end history ---");
+  });
+
   socket.on("message", (m) => console.log("received:", m.body));  // print incoming
 
   function send(text) {

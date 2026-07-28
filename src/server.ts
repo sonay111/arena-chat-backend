@@ -36,6 +36,13 @@ io.on("connection", (socket) => {
 
       socket.join(`conv_${conversation.id}`);
 
+      // Send this client the existing thread, oldest first, so it can render history.
+      const history = await pool.query(
+        `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+        [conversation.id]
+      );
+      socket.emit("history", history.rows);
+
       if (ack) ack({ ok: true, conversationId: conversation.id, status: conversation.status });
     } catch (err) {
       console.error("join failed:", err);
