@@ -8,6 +8,7 @@
   },
   "scripts": {
     "db:setup": "tsx src/db-setup.ts",
+    "dev": "tsx src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,7 +17,8 @@
   "description": "",
   "dependencies": {
     "dotenv": "^17.4.2",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
