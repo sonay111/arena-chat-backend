@@ -2,12 +2,13 @@ import { createServer } from "http";
 import express from "express";
 import { Server } from "socket.io";
 import { pool } from "./db.js";
+import { webhooksRouter } from "./webhooks/index.js";
 
 const app = express();
 // No express.json() here on purpose — it would consume and parse the raw
 // request body for every route. Webhook signature verification needs the
-// exact raw bytes, so JSON parsing is applied per-route instead, once
-// webhook routes are added in the next step.
+// exact raw bytes, so JSON parsing is applied per-route instead (see
+// src/webhooks/*.ts, each route applies its own express.json()).
 
 app.get("/health", async (_req, res) => {
   try {
@@ -18,6 +19,8 @@ app.get("/health", async (_req, res) => {
     res.status(503).json({ status: "error", db: "disconnected" });
   }
 });
+
+app.use(webhooksRouter);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later
