@@ -1,0 +1,50 @@
+{
+  "event": "deposit.initiated",
+  "_id": "PAYMENT_ID_INIT",
+  "userId": "USER_ID",
+  "paymentType": "deposit",
+  "type": "online",
+  "payment_method": "Pay777",
+  "reference_no": "096515b0-ec9f-4893-8259-9557ddcbe111",
+  "amount": 100,
+  "payment_data": {
+    "country": "IN",
+    "method": "upi"
+  },
+  "currency": "INR",
+  "ip": "3.108.233.202",
+  "status": "pending",
+  "payment_id": "TS-1782979747242-10111",
+  "is_chargedback": false,
+  "is_wegered": false,
+  "gateway": "pay777",
+  "network_fee": 0,
+  "createdAt": "2026-07-02T08:09:07.385Z",
+  "updatedAt": "2026-07-02T08:09:07.385Z",
+  "user": {
+    "_id": "USER_ID",
+    "username": "user_ee7gp8sr",
+    "phone": "8930850293",
+    "countryCode": "91",
+    "is_blocked": false,
+    "trusted": false,
+    "withdrawal_block": false,
+    "createdAt": "2026-07-03T05:35:42.588Z"
+  },
+  "wallet": [
+    {
+      "_id": "INR_WALLET_ID",
+      "userId": "USER_ID",
+      "currency": "INR",
+      "balance": 400,
+      "wallet_type": "fiat",
+      "status": "active",
+      "required_wegaring_amount": 0,
+      "total_wegaring_amount": 0,
+      "withdrawal_able_amount": 0,
+      "freebetcash": 0,
+      "createdAt": "2026-07-03T06:32:25.911Z",
+      "updatedAt": "2026-07-03T07:22:42.755Z"
+    }
+  ]
+}

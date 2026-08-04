@@ -1,0 +1,20 @@
+{
+  "_id": "USER_ID",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "is_blocked": false,
+  "username": "username",
+  "firstName": "First",
+  "email": "user@example.com",
+  "phone": "9999999999",
+  "tracker": "tracker-code",
+  "campaignTag": "campaign-a",
+  "affid": "affiliate-1",
+  "provider": "provider-name",
+  "parentProvider": "parent-provider",
+  "click_id": "click-123",
+  "utm_source": "google",
+  "utm_medium": "cpc",
+  "utm_campaign": "signup",
+  "utm_content": "banner-1",
+  "pixel_id": "pixel-001"
+}

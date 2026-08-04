@@ -1,0 +1,33 @@
+{
+  "_id": "BONUS_ID_FREESPIN",
+  "userId": "USER_ID",
+  "spin_id": "SPIN_TEMPLATE_ID",
+  "game_name": "aviator",
+  "target_spin": 20,
+  "status": "active",
+  "expireIn": "2026-07-09T12:00:00.000Z",
+  "createdAt": "2026-07-04T12:00:00.000Z",
+  "updatedAt": "2026-07-04T12:00:00.000Z",
+  "user": {
+    "_id": "USER_ID",
+    "username": "bonus_user",
+    "phone": "9999999999",
+    "countryCode": "91",
+    "is_blocked": false,
+    "trusted": false,
+    "withdrawal_block": false,
+    "createdAt": "2026-07-03T05:35:42.588Z"
+  },
+  "wallet": [
+    {
+      "_id": "INR_WALLET_ID",
+      "userId": "USER_ID",
+      "currency": "INR",
+      "balance": 400,
+      "wallet_type": "fiat",
+      "status": "active",
+      "withdrawal_able_amount": 0,
+      "freebetcash": 0
+    }
+  ]
+}

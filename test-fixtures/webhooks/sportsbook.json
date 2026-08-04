@@ -1,0 +1,50 @@
+{
+  "event": "sportsbook.bet_status_updated",
+  "_id": "BET_ID",
+  "userId": "USER_ID",
+  "amount": 500,
+  "match_id": "MATCH_1001",
+  "market_id": "MARKET_24",
+  "market_name": "Match Winner",
+  "result_string": "won",
+  "team_name": "India",
+  "return_amount": 925,
+  "bet_title": "India to Win",
+  "bet_name": "Back",
+  "tournament_name": "T20 Series",
+  "outcome_id": "OUTCOME_1",
+  "sports_type": "cricket",
+  "device_type": "web",
+  "user_ip": "3.108.233.202",
+  "bet_status": "won",
+  "status": "completed",
+  "bet_type": "single",
+  "wallet_id": "INR_WALLET_ID",
+  "currency": "INR",
+  "createdAt": "2026-07-04T10:20:00.000Z",
+  "updatedAt": "2026-07-04T10:30:00.000Z",
+  "user": {
+    "_id": "USER_ID",
+    "username": "sports_user",
+    "phone": "9999999999",
+    "countryCode": "91",
+    "is_blocked": false,
+    "trusted": false,
+    "withdrawal_block": false,
+    "createdAt": "2026-07-03T05:35:42.588Z"
+  },
+  "wallet": [
+    {
+      "_id": "INR_WALLET_ID",
+      "userId": "USER_ID",
+      "currency": "INR",
+      "balance": 12800,
+      "wallet_type": "fiat",
+      "status": "active",
+      "required_wegaring_amount": 0,
+      "total_wegaring_amount": 0,
+      "withdrawal_able_amount": 12800,
+      "freebetcash": 0
+    }
+  ]
+}

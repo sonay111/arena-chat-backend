@@ -1,0 +1,30 @@
+{
+  "_id": "BONUS_ID_CASHBACK",
+  "user_id": "USER_ID",
+  "admin_id": "ADMIN_ID",
+  "amount": 250,
+  "createdAt": "2026-07-04T12:00:00.000Z",
+  "updatedAt": "2026-07-04T12:00:00.000Z",
+  "user": {
+    "_id": "USER_ID",
+    "username": "bonus_user",
+    "phone": "9999999999",
+    "countryCode": "91",
+    "is_blocked": false,
+    "trusted": false,
+    "withdrawal_block": false,
+    "createdAt": "2026-07-03T05:35:42.588Z"
+  },
+  "wallet": [
+    {
+      "_id": "INR_WALLET_ID",
+      "userId": "USER_ID",
+      "currency": "INR",
+      "balance": 650,
+      "wallet_type": "fiat",
+      "status": "active",
+      "withdrawal_able_amount": 0,
+      "freebetcash": 0
+    }
+  ]
+}
