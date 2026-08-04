@@ -1,8 +1,25 @@
 import { createServer } from "http";
+import express from "express";
 import { Server } from "socket.io";
 import { pool } from "./db.js";
 
-const httpServer = createServer();
+const app = express();
+// No express.json() here on purpose — it would consume and parse the raw
+// request body for every route. Webhook signature verification needs the
+// exact raw bytes, so JSON parsing is applied per-route instead, once
+// webhook routes are added in the next step.
+
+app.get("/health", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok", db: "connected" });
+  } catch (err) {
+    console.error("health check failed:", err);
+    res.status(503).json({ status: "error", db: "disconnected" });
+  }
+});
+
+const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later
 
 // Runs once every time a client (widget or console) connects.
