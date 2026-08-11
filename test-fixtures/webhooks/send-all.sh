@@ -20,8 +20,10 @@ post() {
 
 post "/users"                     "users.json"
 post "/deposits"                  "deposit_initiated.json"
+post "/deposits"                  "deposit_initiated_real.json"
 post "/deposits/status-update"    "deposit_status_update.json"
 post "/withdrawals"               "withdrawal_initiated.json"
+post "/withdrawals"               "withdrawal_initiated_real.json"
 post "/withdrawals/status-update" "withdrawal_status_update.json"
 post "/sportsbook"                "sportsbook.json"
 post "/casino"                    "casino.json"

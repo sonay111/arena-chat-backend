@@ -19,6 +19,13 @@ export type WithdrawalRecord = {
   // Raw status string as it comes from player-data (e.g. "completed",
   // "pending", "processing", "rejected"). Matched literally, case-insensitively.
   status: string;
+  // The platform's REAL .initiated payloads (2026-08, from Satyam) carry a
+  // separate payment_status field alongside status — e.g. status:
+  // "progress" + payment_status: "pending" on the same record. We have no
+  // confirmed example of what payment_status becomes once a payment
+  // actually completes, so this is only used defensively (see
+  // no-unverified-withdrawal-confirmation.ts) — optional and not required.
+  paymentStatus?: string;
 };
 
 export type VerifiedAmount = {

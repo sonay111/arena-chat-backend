@@ -88,30 +88,53 @@ CREATE TABLE IF NOT EXISTS player_wallets (
 );
 CREATE INDEX IF NOT EXISTS idx_player_wallets_user ON player_wallets (user_id);
 
+-- payment_status/approval_status/screenshot/is_reapproved come from the
+-- REAL .initiated payloads Satyam sent (2026-08), which turned out to
+-- differ from docs/tech-crm-webhooks.pdf's one documented example (that
+-- doc only showed the .status_updated shape). Unlike the doc's asymmetric
+-- deposit/withdrawal fields (is_chargedback/gateway/network_fee deposit-only,
+-- bank_id/remark withdrawal-only), these four appear in BOTH real .initiated
+-- examples we have — so they're not marked withdrawal-only here. bank_id
+-- remains withdrawal-only per the original doc example (also confirmed
+-- present in the real withdrawal payload, absent from the real deposit one).
 CREATE TABLE IF NOT EXISTS payments (
-  id              TEXT PRIMARY KEY,     -- payment doc _id
-  user_id         TEXT NOT NULL,
-  payment_type    TEXT NOT NULL,        -- deposit | withdrawal
-  type            TEXT,                 -- e.g. online
-  payment_method  TEXT,
-  reference_no    TEXT,
-  amount          NUMERIC,
-  currency        TEXT,
-  status          TEXT,
-  payment_id      TEXT,
-  ip              TEXT,                 -- deposit only
-  is_chargedback  BOOLEAN,              -- deposit only
-  is_wegered      BOOLEAN,              -- deposit only (platform's spelling, see note above)
-  gateway         TEXT,                 -- deposit only
-  network_fee     NUMERIC,              -- deposit only
-  payment_data    JSONB,                -- deposit only, e.g. {country, method}
-  bank_id         TEXT,                 -- withdrawal only
-  remark          TEXT,                 -- withdrawal only
-  created_at      TIMESTAMPTZ,
-  updated_at      TIMESTAMPTZ,
-  received_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                TEXT PRIMARY KEY,     -- payment doc _id
+  user_id           TEXT NOT NULL,
+  payment_type      TEXT NOT NULL,        -- deposit | withdrawal
+  type              TEXT,                 -- e.g. online
+  payment_method    TEXT,
+  reference_no      TEXT,
+  amount            NUMERIC,
+  currency          TEXT,
+  status            TEXT,
+  payment_status    TEXT,                 -- seen: "pending" (real .initiated payloads); relationship to status for a truly completed payment is unconfirmed, see src/guardrails
+  approval_status   TEXT,                 -- seen: "not_approved"
+  screenshot        TEXT,                 -- seen: null in both real examples; presumably a proof-of-payment reference/URL
+  is_reapproved     BOOLEAN,              -- seen: false in both real examples
+  payment_id        TEXT,
+  ip                TEXT,                 -- deposit only
+  is_chargedback    BOOLEAN,              -- deposit only
+  is_wegered        BOOLEAN,              -- deposit only (platform's spelling, see note above)
+  gateway           TEXT,                 -- deposit only
+  network_fee       NUMERIC,              -- deposit only
+  payment_data      JSONB,                -- deposit only, e.g. {country, method}
+  bank_id           TEXT,                 -- withdrawal only
+  remark            TEXT,                 -- withdrawal only
+  created_at        TIMESTAMPTZ,
+  updated_at        TIMESTAMPTZ,
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_payments_user ON payments (user_id);
+
+-- ALTER, not just CREATE IF NOT EXISTS: the payments table already existed
+-- in every environment that ran db:setup before this change, and CREATE
+-- TABLE IF NOT EXISTS is a no-op against an existing table — it would
+-- never add these columns there. ADD COLUMN IF NOT EXISTS keeps this
+-- script re-runnable on both fresh and already-created databases.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_status TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_status TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS screenshot TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS is_reapproved BOOLEAN;
 
 CREATE TABLE IF NOT EXISTS bets (
   id                    TEXT PRIMARY KEY,   -- bet/casino-bet doc _id

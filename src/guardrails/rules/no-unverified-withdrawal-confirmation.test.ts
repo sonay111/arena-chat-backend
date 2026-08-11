@@ -83,3 +83,48 @@ test("KNOWN LIMITATION: an unusual paraphrase can slip past the heuristic", () =
   );
   assert.equal(result.passed, true);
 });
+
+// --- Cases added after seeing the real .initiated payloads (2026-08) ---
+
+test("blocks a completion claim when status is completed but payment_status is still pending", () => {
+  // This is the real-world case the two live examples surfaced: status and
+  // payment_status can disagree. We have direct evidence "pending" means
+  // not actually done, so this must block even though status alone says
+  // "completed".
+  const result = noUnverifiedWithdrawalConfirmationRule.evaluate(
+    { content: "Your withdrawal has been completed and the funds have been sent." },
+    { ...base, withdrawals: [{ id: "W1", status: "completed", paymentStatus: "pending" }] }
+  );
+  assert.equal(result.passed, false);
+});
+
+test("payment_status pending check is case-insensitive and trims whitespace", () => {
+  const result = noUnverifiedWithdrawalConfirmationRule.evaluate(
+    { content: "Your withdrawal has been completed." },
+    { ...base, withdrawals: [{ id: "W1", status: "completed", paymentStatus: "  Pending  " }] }
+  );
+  assert.equal(result.passed, false);
+});
+
+test("still passes when status is completed and payment_status is absent (matches the original doc example, which had no payment_status field)", () => {
+  const result = noUnverifiedWithdrawalConfirmationRule.evaluate(
+    { content: "Your withdrawal has been completed." },
+    { ...base, withdrawals: [{ id: "W1", status: "completed" }] }
+  );
+  assert.equal(result.passed, true);
+});
+
+test("HONEST GAP: passes when status is completed and payment_status holds any value other than the confirmed 'pending'", () => {
+  // We only have direct evidence that payment_status "pending" means not
+  // done. We do NOT know what value payment_status takes on a genuinely
+  // finished payment, so any other value (including a guess like
+  // "failed", which we've never actually seen either) is not currently
+  // treated as blocking. This is the ambiguity flagged to the user —
+  // not a behavior this test endorses as correct, just what the rule
+  // does given the evidence we actually have.
+  const result = noUnverifiedWithdrawalConfirmationRule.evaluate(
+    { content: "Your withdrawal has been completed." },
+    { ...base, withdrawals: [{ id: "W1", status: "completed", paymentStatus: "some_unconfirmed_value" }] }
+  );
+  assert.equal(result.passed, true);
+});

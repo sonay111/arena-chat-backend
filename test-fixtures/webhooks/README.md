@@ -16,6 +16,16 @@ files reuse that same shape with the `event` field and `status` changed
 (`pending`) and a distinct id, to test the route without misrepresenting it
 as an exact doc example.
 
+**Real, verbatim from the platform team:** `deposit_initiated_real.json` and
+`withdrawal_initiated_real.json` — the actual `.initiated` payloads Satyam
+sent (2026-08). These turned out to differ meaningfully from the adapted
+guesses above: no `user`/`wallet` objects at all, a separate `payment_status`
+field alongside `status` (`status: "progress"` + `payment_status: "pending"`
+on both), and extra fields (`screenshot`, `approval_status`, `is_reapproved`,
+`payment_method_id`, `bonusType`) the doc never mentioned. Kept alongside the
+older adapted files rather than replacing them, so the gap between guess and
+reality stays visible.
+
 ## Run
 
 ```bash
