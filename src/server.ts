@@ -32,12 +32,14 @@ io.on("connection", (socket) => {
   // A client asks to join — create a new conversation, or resume an existing one.
   socket.on("join", async ({ playerId, lastMessageId }, ack) => {
     try {
-      // PLACEHOLDER — signed-token verification goes here later.
-      // The tech team will pass a signed token instead of a raw playerId (see
-      // chat-build-guide.md Part 1.6). When that's ready: verify the token's
-      // signature here, reject the connection (ack({ ok: false })) if it's
-      // invalid, and only then trust the playerId it contains.
-      // For now, with no real players yet, we trust the playerId as given.
+      // PLACEHOLDER — real identity verification goes here later.
+      // Confirmed with Satyam: the widget sends a plain Player ID, not a
+      // signed token. Trust doesn't come from verifying a signature — it
+      // comes from calling the CRM API (src/crm/) with our own key to look
+      // up that player id. If the lookup succeeds, the id is real; if it
+      // fails, reject the connection (ack({ ok: false })).
+      // For now, with no real players yet, we trust the playerId as given
+      // without doing that lookup.
 
       const existing = await pool.query(
         `SELECT * FROM conversations

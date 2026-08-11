@@ -43,7 +43,7 @@ There is a **separate tech team** (led by Satyam) that owns the Arena365 platfor
 
 **Their side (infrastructure + data only):**
 - Embedding our chat widget on arena365.com's authenticated pages
-- Passing the logged-in player's identity into the widget, **signed** (so we can trust who's chatting)
+- Passing the logged-in player's identity into the widget, as a **plain Player ID** — trust comes from our backend looking that id up via the CRM API (our own key), not from a signature (confirmed with Satyam; see Rule 2 below)
 - Hosting our backend + real-time server on **their AWS**, with a managed **Amazon RDS PostgreSQL** database, inside their private network
 - Providing player data via the existing CRM APIs + webhooks
 - IP allowlisting our backend once it's hosted
@@ -129,8 +129,8 @@ Together: webhooks = real-time awareness; APIs = on-demand lookups + backfill. *
 1. **Phase 0 — Setup & Git.** ✅ Done: tools verified, project created, pushed to GitHub.
 2. **Phase 1 — Player-data backend.** ✅ Webhook receiver done: all 8 routes live in `src/webhooks/`, sharing `chatdb` with the chat tables (see "Local database" above). ⏳ CRM API client (on-demand GET lookups) not started yet.
 3. **Phase 2 — Real-time chat core.** ✅ Done: Socket.io server + conversations/messages tables + test client. Persist-before-broadcast.
-4. **Phase 3 — Conversation lifecycle & identity.** ✅ Mostly done: conversation creation on join, message history sent on join, reconnection replay. ⏳ Signed-token verification is still a placeholder (`src/server.ts`, the `join` handler trusts a raw `playerId` for now) — pending the tech team's real signing method. ← **current focus is wrapping up here**
-5. **Phase 4 — Customer widget.** The widget = **look + behavior**, not just a design. To build it we need (a) a rough look/design direction (Arena365 branding — colors, logo, feel; a reference image or sketch helps but isn't required, and it can start plain and improve later), and (b) a clear behavior spec: bubble when closed, panel when open, start a chat, send/receive messages, show typing, reconnect on network drop. Behavior matters more than pixels for v0.1. During Phases 2–3 a throwaway HTML test client stands in for the widget; the real widget replaces it here. Also: coordinate with the tech team on exactly how the signed player identity is passed into the widget (their side embeds it).
+4. **Phase 3 — Conversation lifecycle & identity.** ✅ Mostly done: conversation creation on join, message history sent on join, reconnection replay. ⏳ Identity verification is still a placeholder (`src/server.ts`, the `join` handler trusts a raw `playerId` for now). The mechanism itself is now confirmed with Satyam — plain Player ID, verified by our backend calling the CRM API, not a signed token — but that CRM lookup isn't wired into the `join` handler yet. ← **current focus is wrapping up here**
+5. **Phase 4 — Customer widget.** The widget = **look + behavior**, not just a design. To build it we need (a) a rough look/design direction (Arena365 branding — colors, logo, feel; a reference image or sketch helps but isn't required, and it can start plain and improve later), and (b) a clear behavior spec: bubble when closed, panel when open, start a chat, send/receive messages, show typing, reconnect on network drop. Behavior matters more than pixels for v0.1. During Phases 2–3 a throwaway HTML test client stands in for the widget; the real widget replaces it here. Also: coordinate with the tech team on exactly how the plain player id is passed into the widget (their side embeds it).
 6. **Phase 5 — Agent console wired to backend.**
 7. **Phase 6 — Player 360 in the console.**
 8. **Phase 7 — Supporting systems.**
@@ -152,7 +152,7 @@ Things the merge surfaced that aren't resolved yet — don't treat the current c
 ## Rules & habits (always follow these)
 
 1. **Persist before broadcast.** In chat, always save a message to the database BEFORE sending it to anyone. Never lose a message.
-2. **Never trust the browser's claimed identity.** Verify the signed player token; don't trust a raw player ID from the frontend.
+2. **Never trust the browser's claimed identity.** Confirmed with Satyam: the widget sends a plain Player ID (not a signed token) — trust it only after our backend verifies it via a successful CRM API lookup, not on the frontend's say-so.
 3. **Secrets never go to Git.** Database passwords, the CRM token, signing keys — all in `.env`, which is gitignored.
 4. **Config, not hardcoding.** URLs, tokens, DB connection all come from `.env`, so local→AWS is a config change.
 5. **Test every step before moving on.** A piece isn't done until it's proven working.
