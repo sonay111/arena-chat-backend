@@ -3,6 +3,22 @@ import express from "express";
 import { Server } from "socket.io";
 import { pool } from "./db.js";
 import { webhooksRouter } from "./webhooks/index.js";
+import { getUsers, CrmIpNotAllowedError } from "./crm/index.js";
+
+// TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
+// Satyam's team yet, so every real CRM lookup below currently fails with
+// CrmIpNotAllowedError. Setting SKIP_IDENTITY_CHECK=true lets us keep
+// testing the chat flow locally without live CRM access. This must never
+// be true in a real deployment — the loud startup warning below and the
+// per-join warning are both deliberate, so it can't go unnoticed.
+const SKIP_IDENTITY_CHECK = process.env.SKIP_IDENTITY_CHECK === "true";
+if (SKIP_IDENTITY_CHECK) {
+  console.warn("!".repeat(70));
+  console.warn("!! SKIP_IDENTITY_CHECK=true — join requests are NOT verified against");
+  console.warn("!! the CRM API. Local/dev testing only — this must be OFF in any real");
+  console.warn("!! deployment, or anyone can claim to be any player.");
+  console.warn("!".repeat(70));
+}
 
 const app = express();
 // No express.json() here on purpose — it would consume and parse the raw
@@ -32,14 +48,37 @@ io.on("connection", (socket) => {
   // A client asks to join — create a new conversation, or resume an existing one.
   socket.on("join", async ({ playerId, lastMessageId }, ack) => {
     try {
-      // PLACEHOLDER — real identity verification goes here later.
-      // Confirmed with Satyam: the widget sends a plain Player ID, not a
-      // signed token. Trust doesn't come from verifying a signature — it
-      // comes from calling the CRM API (src/crm/) with our own key to look
-      // up that player id. If the lookup succeeds, the id is real; if it
-      // fails, reject the connection (ack({ ok: false })).
-      // For now, with no real players yet, we trust the playerId as given
-      // without doing that lookup.
+      // Real identity verification: confirmed with Satyam that the widget
+      // sends a plain Player ID, not a signed token. Trust doesn't come
+      // from verifying a signature — it comes from successfully looking
+      // that id up via the CRM API, using our own key.
+      if (SKIP_IDENTITY_CHECK) {
+        console.warn(`join: SKIP_IDENTITY_CHECK active — trusting playerId "${playerId}" without CRM verification`);
+      } else {
+        let verifiedPlayer;
+        try {
+          const { users } = await getUsers({ userId: playerId, limit: 1 });
+          verifiedPlayer = users.find((u) => u._id === playerId);
+        } catch (err) {
+          if (err instanceof CrmIpNotAllowedError) {
+            // Expected until our server's IP is allowlisted — logged
+            // distinctly so it's never confused with a real bug.
+            console.error(
+              `join rejected for playerId "${playerId}": CRM API not reachable yet (IP not allowlisted).`
+            );
+          } else {
+            console.error(`join rejected: CRM identity lookup failed for playerId "${playerId}":`, err);
+          }
+          if (ack) ack({ ok: false, reason: "identity verification failed" });
+          return;
+        }
+
+        if (!verifiedPlayer) {
+          console.error(`join rejected: CRM lookup returned no match for playerId "${playerId}"`);
+          if (ack) ack({ ok: false, reason: "player not found" });
+          return;
+        }
+      }
 
       const existing = await pool.query(
         `SELECT * FROM conversations
