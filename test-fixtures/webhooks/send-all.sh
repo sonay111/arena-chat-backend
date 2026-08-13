@@ -9,12 +9,28 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:4000}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# If WEBHOOK_SHARED_SECRET is set in .env, the auth check (src/webhooks/auth.ts)
+# rejects every request without it — read it the same way the server does,
+# straight from .env, rather than requiring it to be exported separately.
+# NOTE: extract with grep/cut, not `node -e` + dotenv — dotenv prints a
+# banner line to stdout on load, which command substitution would capture
+# too, corrupting the value with an embedded newline.
+ENV_FILE="$(cd "$DIR/../.." && pwd)/.env"
+WEBHOOK_SHARED_SECRET="$(grep '^WEBHOOK_SHARED_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)"
+
 post() {
   local route="$1" file="$2"
   echo "=== POST $route ($file) ==="
-  curl -s -w "\nHTTP %{http_code}\n" -X POST "$BASE_URL$route" \
-    -H "Content-Type: application/json" \
-    -d @"$DIR/$file"
+  if [ -n "$WEBHOOK_SHARED_SECRET" ]; then
+    curl -s -w "\nHTTP %{http_code}\n" -X POST "$BASE_URL$route" \
+      -H "Content-Type: application/json" \
+      -H "x-webhook-secret: $WEBHOOK_SHARED_SECRET" \
+      -d @"$DIR/$file"
+  else
+    curl -s -w "\nHTTP %{http_code}\n" -X POST "$BASE_URL$route" \
+      -H "Content-Type: application/json" \
+      -d @"$DIR/$file"
+  fi
   echo
 }
 
