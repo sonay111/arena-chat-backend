@@ -1,43 +1,48 @@
 {
   "event": "withdrawal.initiated",
-  "_id": "PAYMENT_ID_WD_INIT",
-  "userId": "USER_ID",
-  "paymentType": "withdrawal",
-  "type": "online",
-  "payment_method": "Bank Transfer",
-  "reference_no": "REF-123111",
-  "amount": 2500,
-  "currency": "INR",
-  "status": "pending",
-  "payment_id": "WDL-10111",
-  "bank_id": "BANK_ID",
-  "remark": "awaiting approval",
-  "createdAt": "2026-07-04T09:00:00.000Z",
-  "updatedAt": "2026-07-04T09:00:00.000Z",
-  "user": {
-    "_id": "USER_ID",
-    "username": "user_ee7gp8sr",
-    "phone": "8930850293",
-    "countryCode": "91",
-    "is_blocked": false,
-    "trusted": false,
-    "withdrawal_block": false,
-    "createdAt": "2026-07-03T05:35:42.588Z"
-  },
-  "wallet": [
-    {
-      "_id": "INR_WALLET_ID",
-      "userId": "USER_ID",
-      "currency": "INR",
-      "balance": 400,
-      "wallet_type": "fiat",
-      "status": "active",
-      "required_wegaring_amount": 0,
-      "total_wegaring_amount": 0,
-      "withdrawal_able_amount": 0,
-      "freebetcash": 0,
-      "createdAt": "2026-07-03T06:32:25.911Z",
-      "updatedAt": "2026-07-03T07:22:42.755Z"
-    }
-  ]
+  "eventId": "fixture_withdrawal_initiated",
+  "timestamp": "2026-08-14T00:00:00.000Z",
+  "data": {
+    "event": "withdrawal.initiated",
+    "_id": "PAYMENT_ID_WD_INIT",
+    "userId": "USER_ID",
+    "paymentType": "withdrawal",
+    "type": "online",
+    "payment_method": "Bank Transfer",
+    "reference_no": "REF-123111",
+    "amount": 2500,
+    "currency": "INR",
+    "status": "pending",
+    "payment_id": "WDL-10111",
+    "bank_id": "BANK_ID",
+    "remark": "awaiting approval",
+    "createdAt": "2026-07-04T09:00:00.000Z",
+    "updatedAt": "2026-07-04T09:00:00.000Z",
+    "user": {
+      "_id": "USER_ID",
+      "username": "user_ee7gp8sr",
+      "phone": "8930850293",
+      "countryCode": "91",
+      "is_blocked": false,
+      "trusted": false,
+      "withdrawal_block": false,
+      "createdAt": "2026-07-03T05:35:42.588Z"
+    },
+    "wallet": [
+      {
+        "_id": "INR_WALLET_ID",
+        "userId": "USER_ID",
+        "currency": "INR",
+        "balance": 400,
+        "wallet_type": "fiat",
+        "status": "active",
+        "required_wegaring_amount": 0,
+        "total_wegaring_amount": 0,
+        "withdrawal_able_amount": 0,
+        "freebetcash": 0,
+        "createdAt": "2026-07-03T06:32:25.911Z",
+        "updatedAt": "2026-07-03T07:22:42.755Z"
+      }
+    ]
+  }
 }

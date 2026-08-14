@@ -4,6 +4,17 @@ Sample payloads based on `docs/tech-crm-webhooks.pdf`, all sharing `USER_ID` /
 `PAYMENT_ID` / etc. as the platform ids so they exercise the same
 player/wallet upsert paths together.
 
+**Envelope format (2026-08):** Satyam confirmed HMAC-SHA256 auth and shared
+his own verification example, which showed webhooks arrive wrapped in an
+envelope — `{event, eventId, timestamp, data}` — not the flat per-domain
+shape `docs/tech-crm-webhooks.pdf` documents (that doc matches the older,
+superseded README instead). Every fixture below is wrapped in that envelope;
+`data` holds exactly what used to be the file's root content. `event` names
+and `eventId` values are assumed/assigned (see `src/webhooks/envelope.ts`
+for the reasoning) — not independently confirmed for every route, since
+Satyam only sent one concrete example. `send-all.sh` signs each fixture's
+raw bytes and sends `X-Webhook-Event` / `X-Webhook-Signature`.
+
 **Verbatim from the doc:** `users.json`, `deposit_status_update.json`,
 `withdrawal_status_update.json`, `sportsbook.json`, `casino.json`, and all
 four `bonus_*.json` files.
@@ -34,6 +45,11 @@ bash test-fixtures/webhooks/send-all.sh
 ```
 
 Set `BASE_URL` to point elsewhere, e.g. `BASE_URL=http://localhost:5000 bash test-fixtures/webhooks/send-all.sh`.
+
+If you're extending this script: use `curl --data-binary @file`, not plain
+`-d @file` — the latter silently strips embedded newlines from the file,
+which changes the exact bytes sent and breaks HMAC signature verification
+(the signature is computed over the file as written to disk).
 
 ## Clean up afterward
 

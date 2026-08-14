@@ -1,48 +1,53 @@
 {
-  "_id": "BONUS_ID_FREEBET",
-  "userId": "USER_ID",
-  "rewardType": "freebet",
-  "totalDays": 5,
-  "completedDays": 1,
-  "rewardAmountPerDay": 100,
-  "currency": "INR",
-  "claimWindowHours": 24,
-  "qualifyingStake": 1000,
-  "qualifyingWagered": 200,
-  "minOdds": 1.5,
-  "rewardsStatusPerDay": [
-    {
-      "day": 1,
-      "status": "claimed"
-    }
-  ],
-  "status": "active",
-  "wageringCompletedAt": "2026-07-04T12:00:00.000Z",
-  "nextRewardAt": "2026-07-05T12:00:00.000Z",
-  "createdAt": "2026-07-04T12:00:00.000Z",
-  "updatedAt": "2026-07-04T12:05:00.000Z",
-  "user": {
-    "_id": "USER_ID",
-    "username": "bonus_user",
-    "phone": "9999999999",
-    "countryCode": "91",
-    "is_blocked": false,
-    "trusted": false,
-    "withdrawal_block": false,
-    "createdAt": "2026-07-03T05:35:42.588Z"
-  },
-  "wallet": [
-    {
-      "_id": "INR_WALLET_ID",
-      "userId": "USER_ID",
-      "currency": "INR",
-      "balance": 400,
-      "wallet_type": "fiat",
-      "status": "active",
-      "required_wegaring_amount": 0,
-      "total_wegaring_amount": 0,
-      "withdrawal_able_amount": 0,
-      "freebetcash": 0
-    }
-  ]
+  "event": "bonus.activated",
+  "eventId": "fixture_bonus_freebet",
+  "timestamp": "2026-08-14T00:00:00.000Z",
+  "data": {
+    "_id": "BONUS_ID_FREEBET",
+    "userId": "USER_ID",
+    "rewardType": "freebet",
+    "totalDays": 5,
+    "completedDays": 1,
+    "rewardAmountPerDay": 100,
+    "currency": "INR",
+    "claimWindowHours": 24,
+    "qualifyingStake": 1000,
+    "qualifyingWagered": 200,
+    "minOdds": 1.5,
+    "rewardsStatusPerDay": [
+      {
+        "day": 1,
+        "status": "claimed"
+      }
+    ],
+    "status": "active",
+    "wageringCompletedAt": "2026-07-04T12:00:00.000Z",
+    "nextRewardAt": "2026-07-05T12:00:00.000Z",
+    "createdAt": "2026-07-04T12:00:00.000Z",
+    "updatedAt": "2026-07-04T12:05:00.000Z",
+    "user": {
+      "_id": "USER_ID",
+      "username": "bonus_user",
+      "phone": "9999999999",
+      "countryCode": "91",
+      "is_blocked": false,
+      "trusted": false,
+      "withdrawal_block": false,
+      "createdAt": "2026-07-03T05:35:42.588Z"
+    },
+    "wallet": [
+      {
+        "_id": "INR_WALLET_ID",
+        "userId": "USER_ID",
+        "currency": "INR",
+        "balance": 400,
+        "wallet_type": "fiat",
+        "status": "active",
+        "required_wegaring_amount": 0,
+        "total_wegaring_amount": 0,
+        "withdrawal_able_amount": 0,
+        "freebetcash": 0
+      }
+    ]
+  }
 }

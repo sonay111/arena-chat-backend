@@ -1,43 +1,48 @@
 {
   "event": "casino.session_settled",
-  "_id": "CASINO_BET_ID",
-  "userId": "USER_ID",
-  "amount": 200,
-  "return_amount": 350,
-  "game_code": "aviator",
-  "developer_code": "spribe",
-  "bet_with_bonus": false,
-  "transaction_id": "TXN-1001",
-  "debit_transaction_id": "TXN-1001",
-  "credit_transaction_id": "TXN-1002",
-  "round": "ROUND-501",
-  "session": "SESSION-20",
-  "status": "won",
-  "bet_type": "real",
-  "currency": "INR",
-  "createdAt": "2026-07-04T11:00:00.000Z",
-  "updatedAt": "2026-07-04T11:00:10.000Z",
-  "user": {
-    "_id": "USER_ID",
-    "username": "casino_user",
-    "phone": "9999999999",
-    "countryCode": "91",
-    "is_blocked": false,
-    "trusted": false,
-    "withdrawal_block": false,
-    "createdAt": "2026-07-03T05:35:42.588Z"
-  },
-  "wallet": [
-    {
-      "_id": "INR_WALLET_ID",
-      "userId": "USER_ID",
-      "currency": "INR",
-      "balance": 9500,
-      "wallet_type": "fiat",
-      "status": "active",
-      "required_wegaring_amount": 0,
-      "total_wegaring_amount": 0,
-      "withdrawal_able_amount": 9500
-    }
-  ]
+  "eventId": "fixture_casino",
+  "timestamp": "2026-08-14T00:00:00.000Z",
+  "data": {
+    "event": "casino.session_settled",
+    "_id": "CASINO_BET_ID",
+    "userId": "USER_ID",
+    "amount": 200,
+    "return_amount": 350,
+    "game_code": "aviator",
+    "developer_code": "spribe",
+    "bet_with_bonus": false,
+    "transaction_id": "TXN-1001",
+    "debit_transaction_id": "TXN-1001",
+    "credit_transaction_id": "TXN-1002",
+    "round": "ROUND-501",
+    "session": "SESSION-20",
+    "status": "won",
+    "bet_type": "real",
+    "currency": "INR",
+    "createdAt": "2026-07-04T11:00:00.000Z",
+    "updatedAt": "2026-07-04T11:00:10.000Z",
+    "user": {
+      "_id": "USER_ID",
+      "username": "casino_user",
+      "phone": "9999999999",
+      "countryCode": "91",
+      "is_blocked": false,
+      "trusted": false,
+      "withdrawal_block": false,
+      "createdAt": "2026-07-03T05:35:42.588Z"
+    },
+    "wallet": [
+      {
+        "_id": "INR_WALLET_ID",
+        "userId": "USER_ID",
+        "currency": "INR",
+        "balance": 9500,
+        "wallet_type": "fiat",
+        "status": "active",
+        "required_wegaring_amount": 0,
+        "total_wegaring_amount": 0,
+        "withdrawal_able_amount": 9500
+      }
+    ]
+  }
 }

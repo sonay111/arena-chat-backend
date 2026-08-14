@@ -1,6 +1,6 @@
-import express, { Router } from "express";
+import { Router } from "express";
+import type { Request, Response } from "express";
 import { pool } from "../db.js";
-import { logRawEvent } from "./raw-log.js";
 import { upsertPlayerCore } from "./players.js";
 import { upsertWallets } from "./wallets.js";
 
@@ -97,47 +97,86 @@ async function upsertBet(row: BetRow) {
   );
 }
 
-async function handleBetWebhook(category: "sportsbook" | "casino", routePath: string, req: express.Request, res: express.Response) {
-  const body = req.body;
-  try {
-    await logRawEvent(routePath, body.event ?? null, body.userId ?? null, body);
+// Event names are "sportsbook.bet_placed" / "sportsbook.bet_status_updated"
+// or "casino.bet_placed" / "casino.session_settled" (docs/tech-crm-webhooks.pdf).
+// The prefix before the first "." is the category — this is what "use
+// body.event to know which event type it is, rather than inferring it from
+// the route path" means for this file specifically: previously category
+// was a hardcoded literal passed in based on which route matched.
+function categoryFromEvent(eventName: string | undefined): "sportsbook" | "casino" | null {
+  const prefix = eventName?.split(".")[0];
+  if (prefix === "sportsbook") return "sportsbook";
+  if (prefix === "casino") return "casino";
+  return null;
+}
 
-    if (body.user) await upsertPlayerCore(body.user);
-    if (Array.isArray(body.wallet)) await upsertWallets(body.wallet);
+// OLDER ASSUMED FORMAT (flat, no envelope) — kept for reference in case the
+// envelope guess turns out wrong and this needs reverting. Under the old
+// assumption, category came from which route matched (hardcoded per call
+// site below), the body was read directly off req.body, and raw logging
+// happened per-route right here:
+//
+//   async function handleBetWebhook(category, routePath, req, res) {
+//     const body = req.body;
+//     await logRawEvent(routePath, body.event ?? null, body.userId ?? null, body);
+//     if (body.user) await upsertPlayerCore(body.user);
+//     if (Array.isArray(body.wallet)) await upsertWallets(body.wallet);
+//     await upsertBet({ id: body._id, user_id: body.userId, category, ... });
+//     ...
+//   }
+//   betsRouter.post("/sportsbook", express.json(), (req, res) => handleBetWebhook("sportsbook", "/sportsbook", req, res));
+//   betsRouter.post("/casino", express.json(), (req, res) => handleBetWebhook("casino", "/casino", req, res));
+//
+// Confirmed with Satyam: the real shape is an envelope — {event, eventId,
+// timestamp, data} — category is now derived from `event`, and `data`
+// holds what used to be the body root. Raw logging now happens once,
+// globally, in envelope.ts — not per-route.
+async function handleBetWebhook(routePath: string, req: Request, res: Response) {
+  const envelope = req.webhookEnvelope;
+  const data = envelope?.data;
+  const category = categoryFromEvent(envelope?.event);
+
+  if (!data || !category) {
+    return res.status(400).json({ ok: false });
+  }
+
+  try {
+    if (data.user) await upsertPlayerCore(data.user);
+    if (Array.isArray(data.wallet)) await upsertWallets(data.wallet);
 
     await upsertBet({
-      id: body._id,
-      user_id: body.userId,
+      id: data._id,
+      user_id: data.userId,
       category,
-      amount: body.amount ?? null,
-      return_amount: body.return_amount ?? null,
-      status: body.status ?? null,
-      bet_type: body.bet_type ?? null,
-      currency: body.currency ?? null,
-      match_id: body.match_id ?? null,
-      market_id: body.market_id ?? null,
-      market_name: body.market_name ?? null,
-      result_string: body.result_string ?? null,
-      team_name: body.team_name ?? null,
-      bet_title: body.bet_title ?? null,
-      bet_name: body.bet_name ?? null,
-      tournament_name: body.tournament_name ?? null,
-      outcome_id: body.outcome_id ?? null,
-      sports_type: body.sports_type ?? null,
-      device_type: body.device_type ?? null,
-      user_ip: body.user_ip ?? null,
-      bet_status: body.bet_status ?? null,
-      wallet_id: body.wallet_id ?? null,
-      game_code: body.game_code ?? null,
-      developer_code: body.developer_code ?? null,
-      bet_with_bonus: body.bet_with_bonus ?? null,
-      transaction_id: body.transaction_id ?? null,
-      debit_transaction_id: body.debit_transaction_id ?? null,
-      credit_transaction_id: body.credit_transaction_id ?? null,
-      round: body.round ?? null,
-      session: body.session ?? null,
-      created_at: body.createdAt ?? null,
-      updated_at: body.updatedAt ?? null,
+      amount: data.amount ?? null,
+      return_amount: data.return_amount ?? null,
+      status: data.status ?? null,
+      bet_type: data.bet_type ?? null,
+      currency: data.currency ?? null,
+      match_id: data.match_id ?? null,
+      market_id: data.market_id ?? null,
+      market_name: data.market_name ?? null,
+      result_string: data.result_string ?? null,
+      team_name: data.team_name ?? null,
+      bet_title: data.bet_title ?? null,
+      bet_name: data.bet_name ?? null,
+      tournament_name: data.tournament_name ?? null,
+      outcome_id: data.outcome_id ?? null,
+      sports_type: data.sports_type ?? null,
+      device_type: data.device_type ?? null,
+      user_ip: data.user_ip ?? null,
+      bet_status: data.bet_status ?? null,
+      wallet_id: data.wallet_id ?? null,
+      game_code: data.game_code ?? null,
+      developer_code: data.developer_code ?? null,
+      bet_with_bonus: data.bet_with_bonus ?? null,
+      transaction_id: data.transaction_id ?? null,
+      debit_transaction_id: data.debit_transaction_id ?? null,
+      credit_transaction_id: data.credit_transaction_id ?? null,
+      round: data.round ?? null,
+      session: data.session ?? null,
+      created_at: data.createdAt ?? null,
+      updated_at: data.updatedAt ?? null,
     });
 
     res.status(200).json({ ok: true });
@@ -147,5 +186,5 @@ async function handleBetWebhook(category: "sportsbook" | "casino", routePath: st
   }
 }
 
-betsRouter.post("/sportsbook", express.json(), (req, res) => handleBetWebhook("sportsbook", "/sportsbook", req, res));
-betsRouter.post("/casino", express.json(), (req, res) => handleBetWebhook("casino", "/casino", req, res));
+betsRouter.post("/sportsbook", (req, res) => handleBetWebhook("/sportsbook", req, res));
+betsRouter.post("/casino", (req, res) => handleBetWebhook("/casino", req, res));

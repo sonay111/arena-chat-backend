@@ -11,6 +11,7 @@
     "dev": "tsx src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:webhooks": "bash test-fixtures/webhooks/send-all.sh",
+    "test:webhooks:auth": "tsx --test src/webhooks/*.test.ts",
     "test:guardrails": "tsx --test src/guardrails/*.test.ts src/guardrails/rules/*.test.ts src/guardrails/lib/*.test.ts"
   },
   "keywords": [],

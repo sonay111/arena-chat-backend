@@ -143,9 +143,10 @@ Together: webhooks = real-time awareness; APIs = on-demand lookups + backfill. *
 
 Things the merge surfaced that aren't resolved yet — don't treat the current code around these as final, and don't guess further without checking with Satyam's team:
 
-1. **Webhook auth method is unknown.** `docs/tech-crm-webhooks.pdf` doesn't say how the platform authenticates these webhooks. `src/webhooks/auth.ts` currently checks an optional shared-secret header (`WEBHOOK_SHARED_SECRET`), skipped entirely when that env var is empty. This is a placeholder, not real verification (e.g. no HMAC signature check yet).
-2. **Bonus `trigger_type` (activated vs. expired) isn't derivable from the payload.** The doc says the trigger type is "known by source flow" on the platform's side, but bonus webhooks carry no `event` field, and there's no other field in any of the four bonus shapes that reveals it to us. `bonuses.trigger_type` is always `null` right now (see `src/webhooks/bonuses.ts`).
-3. **The `.initiated` payload shape for `/deposits` and `/withdrawals` is unverified.** The doc only shows one example JSON per payment type — the `.status_updated` variant. `test-fixtures/webhooks/deposit_initiated.json` and `withdrawal_initiated.json` were adapted from that same shape (event name + status changed), not taken from a real documented example. Confirm the actual `.initiated` shape once available.
+1. ~~Webhook auth method is unknown.~~ **RESOLVED (2026-08).** Satyam confirmed HMAC-SHA256: `X-Webhook-Signature` is `hex(HMAC-SHA256(raw request body, WEBHOOK_SIGNING_SECRET))`. Implemented in `src/webhooks/auth.ts`.
+2. ~~Bonus `trigger_type` isn't derivable from the payload.~~ **RESOLVED (2026-08), as a side effect of #1.** Satyam's own verification example also revealed the real webhook shape is an envelope — `{event, eventId, timestamp, data}` — not the flat shape `docs/tech-crm-webhooks.pdf` documents. `event` turned out to be exactly the "known by source flow" signal the doc meant (`bonus.activated` / `bonus.expired`), so `trigger_type` is populated from it now (see `src/webhooks/bonuses.ts`).
+3. **The `.initiated` payload shape for `/deposits` and `/withdrawals` is still unverified**, and now compounded by the envelope switch above — `event`/`eventId` names for most routes are assumed by convention (`deposit.initiated`, `user.registered`, etc.), not individually confirmed with Satyam. Only one concrete example of the envelope shape exists so far. Confirm both the `.initiated` payload shape and the exact event-name strings once real traffic arrives.
+4. **NEW: exact `data.userId` vs `data._id` convention per route is inferred, not confirmed.** `src/webhooks/envelope.ts` derives the raw log's `user_id` from `data.userId`, falling back to `data.user._id`, falling back to `data._id` *only* for `/users` (the one route where `data` is the user object itself, not a wrapping payment/bet/bonus doc). Reasonable given the doc's shared-user-object convention, but untested against a real non-`/users` envelope.
 
 ---
 
@@ -166,7 +167,7 @@ Things the merge surfaced that aren't resolved yet — don't treat the current c
 - **chat-build-guide.md** — step-by-step technical build of the real-time chat core (concepts + code). Use for Phase 2+.
 - **master-build-guide.md** — the overall ordered roadmap + tool setup.
 - **self-built-chat-plan.md** — architecture & migration strategy.
-- **docs/tech-crm-webhooks.pdf** — the authoritative webhook payload spec (ignore the older `docs/CRM_WEBHOOK_README.pdf`, superseded).
+- **docs/tech-crm-webhooks.pdf** — authoritative for the per-domain field content (deposit/withdrawal/bet/bonus shapes). **Correction (2026-08):** `docs/CRM_WEBHOOK_README.pdf` was called "superseded" — that's wrong for the outer envelope. Satyam's own HMAC verification example confirmed webhooks actually arrive wrapped in `{event, eventId, timestamp, data}`, matching that older README, not the flat shape `tech-crm-webhooks.pdf` shows. Use both: envelope shape from the README, per-domain `data` content from `tech-crm-webhooks.pdf`.
 - **test-fixtures/webhooks/** — sample payloads for all 8 webhook routes + a script to exercise them against a running server.
 
 ---

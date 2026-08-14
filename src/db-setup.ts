@@ -23,16 +23,30 @@ CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversation_id);
 -- ===== Player-data tables (source: docs/tech-crm-webhooks.pdf) =====
 -- These are fire-and-forget webhooks with no retries, so raw_webhook_events
 -- logs every payload verbatim before any structured parsing happens.
-
+--
+-- event_id (added 2026-08, once Satyam confirmed the real envelope format
+-- {event, eventId, timestamp, data}): the doc says retries can resend the
+-- same delivery, so this is unique (when present) and used to dedupe —
+-- a retried delivery updates nothing and inserts no second row. Nullable:
+-- older/malformed payloads that never carried an eventId still get logged.
 CREATE TABLE IF NOT EXISTS raw_webhook_events (
   id          BIGSERIAL PRIMARY KEY,
   route       TEXT NOT NULL,        -- e.g. /deposits, /withdrawals/status-update, /bonuses
-  event_name  TEXT,                 -- null for /users (no event field) and /bonuses (trigger known by source flow, not body)
+  event_name  TEXT,                 -- the envelope's event field
+  event_id    TEXT,                 -- the envelope's eventId field — see note above
   user_id     TEXT,
   payload     JSONB NOT NULL,
   received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_raw_webhook_events_user ON raw_webhook_events (user_id);
+
+-- ALTER, not just CREATE IF NOT EXISTS — raw_webhook_events already existed
+-- before event_id was added (same reasoning as the payments table below).
+-- Must run before the index below, which references this column — on an
+-- already-existing table, CREATE TABLE IF NOT EXISTS is a no-op, so this
+-- ALTER is the only thing that actually adds the column there.
+ALTER TABLE raw_webhook_events ADD COLUMN IF NOT EXISTS event_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_webhook_events_event_id ON raw_webhook_events (event_id) WHERE event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS players (
   id               TEXT PRIMARY KEY,   -- platform's _id
