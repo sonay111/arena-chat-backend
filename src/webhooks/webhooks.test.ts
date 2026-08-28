@@ -259,3 +259,71 @@ test("/withdrawals with no paymentType field: inferred as 'withdrawal' from the 
   await cleanupEventId(eventId);
   await cleanupPayment(paymentId);
 });
+
+// Real traffic confirmed 2026-08-27 (evt_0ef377ccfe4d8d32): this same
+// simpler shape also omits createdAt, using dateTime instead. created_at
+// was silently landing NULL, which permanently hides the row from the
+// withdrawal-delay detector's `created_at < now() - interval` check —
+// worse than the paymentType crash, since this failed silently (200 OK,
+// row inserted, just useless for the delay check).
+test("/withdrawals with no createdAt field: falls back to dateTime, not left NULL", async () => {
+  const eventId = "test_evt_withdrawal_no_createdat";
+  const paymentId = "test_payment_withdrawal_no_createdat";
+  const envelope = {
+    event: "withdrawal.completed",
+    eventId,
+    timestamp: "2026-08-27T07:48:09.555Z",
+    data: {
+      _id: paymentId,
+      userId: "TEST_PLAYER_WITHDRAWAL_NO_CREATEDAT",
+      amount: 9,
+      currency: "usdttrc20",
+      status: "completed",
+      dateTime: "2026-08-27T07:48:09.395Z",
+    },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status } = await post("/withdrawals", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+
+  const payment = await pool.query("SELECT created_at FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1);
+  assert.equal(payment.rows[0].created_at.toISOString(), "2026-08-27T07:48:09.395Z");
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
+});
+
+// Guards the other half of the fallback: when createdAt IS present, it
+// must win unchanged, the same way paymentType does above.
+test("/withdrawals with createdAt present: the provided value wins over dateTime", async () => {
+  const eventId = "test_evt_withdrawal_with_createdat";
+  const paymentId = "test_payment_withdrawal_with_createdat";
+  const envelope = {
+    event: "withdrawal.status_updated",
+    eventId,
+    timestamp: "2026-07-04T09:05:00.000Z",
+    data: {
+      _id: paymentId,
+      userId: "TEST_PLAYER_WITHDRAWAL_WITH_CREATEDAT",
+      paymentType: "withdrawal",
+      amount: 2500,
+      currency: "INR",
+      status: "completed",
+      createdAt: "2026-07-04T09:00:00.000Z",
+      dateTime: "2026-07-04T09:05:00.000Z",
+    },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status } = await post("/withdrawals/status-update", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+
+  const payment = await pool.query("SELECT created_at FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1);
+  assert.equal(payment.rows[0].created_at.toISOString(), "2026-07-04T09:00:00.000Z");
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
+});

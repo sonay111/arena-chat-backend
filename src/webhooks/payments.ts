@@ -48,6 +48,14 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
   // from which route the request actually arrived on.
   const paymentType: string = data.paymentType ?? (routePath.startsWith("/withdrawals") ? "withdrawal" : "deposit");
 
+  // Same simpler shape also omits createdAt, using dateTime instead (see
+  // evt_0ef377ccfe4d8d32, 2026-08-27) -- left as ?? null, created_at was
+  // silently landing NULL, which permanently hides the row from the
+  // withdrawal-delay detector's `created_at < now() - interval` check
+  // (any comparison against NULL is never true in SQL), no matter how
+  // long it's actually been pending.
+  const createdAt = data.createdAt ?? data.dateTime ?? null;
+
   try {
     if (data.user) await upsertPlayerCore(data.user);
     if (Array.isArray(data.wallet)) await upsertWallets(data.wallet);
@@ -106,7 +114,7 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
         data.payment_data ? JSON.stringify(data.payment_data) : null,
         data.bank_id ?? null,
         data.remark ?? null,
-        data.createdAt ?? null,
+        createdAt,
         data.updatedAt ?? null,
       ]
     );
