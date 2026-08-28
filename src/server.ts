@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import { pool } from "./db.js";
 import { webhooksRouter } from "./webhooks/index.js";
 import { getUsers, CrmIpNotAllowedError } from "./crm/index.js";
+import { alertsRouter, startWithdrawalDelayCheck, refreshAlertsRouter } from "./alerts/index.js";
 
 // TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
 // Satyam's team yet, so every real CRM lookup below currently fails with
@@ -37,6 +38,8 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use(webhooksRouter);
+app.use(alertsRouter);
+app.use(refreshAlertsRouter);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later
@@ -143,4 +146,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => console.log("disconnected:", socket.id));
 });
 
-httpServer.listen(4000, () => console.log("real-time server on :4000"));
+httpServer.listen(4000, () => {
+  console.log("real-time server on :4000");
+  startWithdrawalDelayCheck();
+});

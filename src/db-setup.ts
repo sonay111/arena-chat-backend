@@ -150,6 +150,48 @@ ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_status TEXT;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS screenshot TEXT;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS is_reapproved BOOLEAN;
 
+-- Dedupe gate for the withdrawal-delay detector (src/alerts/): once a
+-- withdrawal has been flagged as delayed, it's never re-flagged, even
+-- after it eventually completes. NOT NULL DEFAULT false so every existing
+-- row backfills to "not flagged" rather than NULL.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS flagged_delayed BOOLEAN NOT NULL DEFAULT false;
+
+-- Partial index: only covers withdrawals the detector still needs to look
+-- at (unflagged). Shrinks as withdrawals get flagged instead of growing
+-- with the whole payments table.
+CREATE INDEX IF NOT EXISTS idx_payments_withdrawal_delay_pending ON payments (created_at)
+  WHERE payment_type = 'withdrawal' AND flagged_delayed = false;
+
+-- One row per flagged withdrawal, written once at flag time. player_context
+-- is a snapshot from the CRM API captured at that moment (not re-fetched on
+-- every GET /alerts/withdrawal-delays) — withdrawal fields themselves
+-- (amount/status/etc.) are read live from payments via a join, since those
+-- can still change after flagging.
+CREATE TABLE IF NOT EXISTS withdrawal_delay_alerts (
+  id             BIGSERIAL PRIMARY KEY,
+  payment_id     TEXT NOT NULL UNIQUE REFERENCES payments(id),
+  player_context JSONB NOT NULL,
+  flagged_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ===== Refresh-detection alerts (src/alerts/refresh-detection.ts) =====
+-- Separate feature from withdrawal-delay alerts above — a different
+-- caller reports "this player refreshed repeatedly" and we just log +
+-- store it for now. The exact contract (what refresh_count counts, who
+-- generates the timestamp, its format) isn't confirmed with Satyam yet,
+-- so client_timestamp stays TEXT (verbatim, not parsed as a real
+-- timestamp) and the full raw body is kept in payload — same reasoning as
+-- raw_webhook_events above: don't lose data to a schema guessed too early.
+CREATE TABLE IF NOT EXISTS refresh_alerts (
+  id               BIGSERIAL PRIMARY KEY,
+  player_id        TEXT NOT NULL,
+  refresh_count    NUMERIC,
+  client_timestamp TEXT,
+  payload          JSONB NOT NULL,
+  received_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_alerts_player ON refresh_alerts (player_id);
+
 CREATE TABLE IF NOT EXISTS bets (
   id                    TEXT PRIMARY KEY,   -- bet/casino-bet doc _id
   user_id               TEXT NOT NULL,

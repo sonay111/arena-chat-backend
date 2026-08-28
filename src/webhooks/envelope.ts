@@ -61,15 +61,18 @@ export async function logIncomingEnvelope(req: Request, res: Response, next: Nex
   const eventName = envelope?.event ?? null;
   const eventId = envelope?.eventId ?? null;
   // Most events carry data.userId (payments/bets) or data.user._id (bonuses'
-  // shared user object). /users is the odd one out — data IS the user
-  // object itself (see users.ts), so its own _id is the user id. Gate that
-  // fallback on the route, not a guessed event-name string: we know for
-  // certain what hits POST /users, but not the exact literal Satyam's
-  // system sends for it. For every other route, data._id is some other
-  // domain object's own id (a payment, a bet, ...), not the user's, and
-  // must not be mistaken for it here.
+  // shared user object). player.refresh_detected (src/alerts/refresh-detection.ts)
+  // is the one confirmed exception that uses data.playerId instead. /users
+  // is the odd one out — data IS the user object itself (see users.ts), so
+  // its own _id is the user id. Gate that fallback on the route, not a
+  // guessed event-name string: we know for certain what hits POST /users,
+  // but not the exact literal Satyam's system sends for it. For every
+  // other route, data._id is some other domain object's own id (a
+  // payment, a bet, ...), not the user's, and must not be mistaken for it
+  // here.
   const userId =
     envelope?.data?.userId ??
+    envelope?.data?.playerId ??
     envelope?.data?.user?._id ??
     (req.path === "/users" ? envelope?.data?._id : undefined) ??
     null;
