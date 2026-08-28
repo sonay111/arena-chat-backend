@@ -37,6 +37,17 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
     return res.status(400).json({ ok: false });
   }
 
+  // Real traffic confirmed 2026-08-25: some /deposits deliveries omit
+  // paymentType entirely (a simpler shape than the "initiated"/"status_updated"
+  // examples this code was originally built against, which always carried
+  // it) -- payment_type is NOT NULL, so every one of these was crashing the
+  // insert (see evt_93c4a8b099940cc7, retried since 2026-08-20). When the
+  // field is present, it wins unchanged -- other real payloads (withdrawals
+  // in particular) are confirmed to carry it and this must not override
+  // that. Only missing it falls back to inferring deposit vs withdrawal
+  // from which route the request actually arrived on.
+  const paymentType: string = data.paymentType ?? (routePath.startsWith("/withdrawals") ? "withdrawal" : "deposit");
+
   try {
     if (data.user) await upsertPlayerCore(data.user);
     if (Array.isArray(data.wallet)) await upsertWallets(data.wallet);
@@ -75,7 +86,7 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
       [
         data._id,
         data.userId,
-        data.paymentType ?? null,
+        paymentType,
         data.type ?? null,
         data.payment_method ?? null,
         data.reference_no ?? null,

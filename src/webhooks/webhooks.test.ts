@@ -57,6 +57,10 @@ async function cleanupPlayer(userId: string) {
   await pool.query("DELETE FROM players WHERE id = $1", [userId]);
 }
 
+async function cleanupPayment(paymentId: string) {
+  await pool.query("DELETE FROM payments WHERE id = $1", [paymentId]);
+}
+
 test("valid signature + envelope: passes and stores correctly", async () => {
   const eventId = "test_evt_valid_1";
   const userId = "TEST_PLAYER_VALID_1";
@@ -156,4 +160,102 @@ test("retry with the same eventId: deduplicated, no second raw log row", async (
 
   await cleanupEventId(eventId);
   await cleanupPlayer(userId);
+});
+
+// Real traffic confirmed 2026-08-25 (evt_93c4a8b099940cc7, retried since
+// 2026-08-20): some /deposits deliveries omit paymentType entirely, a
+// simpler shape than the "initiated"/"status_updated" examples this
+// handler was originally built against. payment_type is NOT NULL, so this
+// exact shape was crashing every insert with a 500 before the route-based
+// inference fallback in payments.ts.
+test("/deposits with no paymentType field: inferred as 'deposit' from the route, not a 500", async () => {
+  const eventId = "test_evt_deposit_no_paymenttype";
+  const paymentId = "test_payment_no_paymenttype";
+  const envelope = {
+    event: "deposit.completed",
+    eventId,
+    timestamp: "2026-08-25T08:23:00.994Z",
+    data: {
+      _id: paymentId,
+      userId: "TEST_PLAYER_DEPOSIT_NO_TYPE",
+      amount: 20,
+      dateTime: "2026-08-25T08:23:00.796Z",
+      status: "completed",
+      currency: "usdttrc20",
+    },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status, body } = await post("/deposits", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+  assert.equal(body?.ok, true);
+
+  const payment = await pool.query("SELECT payment_type, user_id, amount FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1);
+  assert.equal(payment.rows[0].payment_type, "deposit");
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
+});
+
+// Guards the other half of the fallback: when paymentType IS present, it
+// must win unchanged — the route-based inference is a fallback for when
+// the field is missing, not a rule that overrides real data.
+test("/withdrawals with paymentType present: the provided value wins, not the route guess", async () => {
+  const eventId = "test_evt_withdrawal_with_paymenttype";
+  const paymentId = "test_payment_withdrawal_with_type";
+  const envelope = {
+    event: "withdrawal.status_updated",
+    eventId,
+    timestamp: "2026-07-04T09:05:00.000Z",
+    data: {
+      _id: paymentId,
+      userId: "TEST_PLAYER_WITHDRAWAL_WITH_TYPE",
+      paymentType: "withdrawal",
+      amount: 2500,
+      currency: "INR",
+      status: "completed",
+    },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status } = await post("/withdrawals/status-update", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+
+  const payment = await pool.query("SELECT payment_type FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1);
+  assert.equal(payment.rows[0].payment_type, "withdrawal");
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
+});
+
+// Symmetric case to the /deposits fix: paymentType missing on /withdrawals
+// should infer 'withdrawal', not fall back to 'deposit'.
+test("/withdrawals with no paymentType field: inferred as 'withdrawal' from the route", async () => {
+  const eventId = "test_evt_withdrawal_no_paymenttype";
+  const paymentId = "test_payment_withdrawal_no_type";
+  const envelope = {
+    event: "withdrawal.completed",
+    eventId,
+    timestamp: "2026-08-25T08:23:00.994Z",
+    data: {
+      _id: paymentId,
+      userId: "TEST_PLAYER_WITHDRAWAL_NO_TYPE",
+      amount: 100,
+      status: "completed",
+      currency: "INR",
+    },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status } = await post("/withdrawals", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+
+  const payment = await pool.query("SELECT payment_type FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1);
+  assert.equal(payment.rows[0].payment_type, "withdrawal");
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
 });
