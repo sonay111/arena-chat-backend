@@ -37,12 +37,20 @@ before(async () => {
      VALUES ($1, $2, 'withdrawal', 'progress', 250, 'INR', now() - interval '15 minutes', now())`,
     [id, userId]
   );
-  const fetcher = async (uid: string): Promise<PlayerContext> => ({
-    identity: { _id: uid, username: "route_test_user", createdAt: "2026-01-01T00:00:00.000Z", is_blocked: false },
-    recentDeposits: [],
-    recentWithdrawals: [],
-    activeBonuses: [],
-  });
+  // Same shared-dev-DB caveat as withdrawal-delay-detector.test.ts: this
+  // fetcher must only ever answer for the one userId this test created,
+  // not any other eligible row the candidate query happens to also find.
+  const fetcher = async (uid: string): Promise<PlayerContext> => {
+    if (uid !== userId) {
+      throw new Error(`unexpected userId "${uid}" passed to test fetcher — refusing to enrich a row this test didn't create`);
+    }
+    return {
+      identity: { _id: uid, username: "route_test_user", createdAt: "2026-01-01T00:00:00.000Z", is_blocked: false },
+      recentDeposits: [],
+      recentWithdrawals: [],
+      activeBonuses: [],
+    };
+  };
   await checkWithdrawalDelays(fetcher);
 
   await pool.query(

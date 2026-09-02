@@ -14,10 +14,30 @@ after(async () => {
   await pool.end();
 });
 
+// Real detector, shared dev DB, no per-test scoping on the candidate query
+// (see checkWithdrawalDelays) — so if any other eligible withdrawal is
+// sitting in the table when these tests run, this fetcher would get called
+// for it too. Restricting to exactly the userIds these tests create means
+// an unexpected call throws instead of silently "succeeding" and enriching
+// a row this test didn't create — the detector's own "CRM failed, skip,
+// leave unflagged" path handles that safely.
+const KNOWN_TEST_USER_IDS = new Set([
+  "TEST_USER_UNDER_10",
+  "TEST_USER_OVER_10_PENDING",
+  "TEST_USER_COMPLETED",
+  "TEST_USER_NO_DOUBLE_FLAG",
+]);
+
 function fakePlayerContextFetcher() {
   const calls: Record<string, number> = {};
   const fetcher = async (userId: string): Promise<PlayerContext> => {
     calls[userId] = (calls[userId] ?? 0) + 1;
+    if (!KNOWN_TEST_USER_IDS.has(userId)) {
+      throw new Error(
+        `fakePlayerContextFetcher called with unexpected userId "${userId}" — refusing to ` +
+        `enrich a row this test didn't create (likely a real row picked up from the shared dev DB)`
+      );
+    }
     return {
       identity: { _id: userId, username: `fake_${userId}`, createdAt: "2026-01-01T00:00:00.000Z", is_blocked: false },
       recentDeposits: [],
