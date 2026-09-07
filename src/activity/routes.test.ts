@@ -129,10 +129,17 @@ before(async () => {
   });
 });
 
+const SUMMARY_EVENT_IDS = [
+  "activity_test_summary_bonus_mostrecent",
+  "activity_test_summary_bonus_within24h",
+  "activity_test_summary_bonus_outside24h",
+  "activity_test_summary_bonus_excluded",
+];
+
 after(async () => {
   await pool.query(
     `DELETE FROM raw_webhook_events WHERE event_id = ANY($1)`,
-    [Object.values(EVENT_IDS)]
+    [[...Object.values(EVENT_IDS), ...SUMMARY_EVENT_IDS]]
   );
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   await pool.end();
@@ -205,4 +212,91 @@ test("withdrawal.initiated produces a description with the real amount and curre
 test("an invalid 'before' cursor is rejected with 400, not a crash", async () => {
   const res = await fetch(`${baseUrl}/activity/recent?before=not-a-real-date`);
   assert.equal(res.status, 400);
+});
+
+test("eventType filter restricts to just the matching event type", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=50&eventType=withdrawal.initiated`);
+  const body = await res.json();
+
+  const ourRows = body.items.filter((i: any) =>
+    [USER_IDS.page1, USER_IDS.page2, USER_IDS.page3].includes(i.userId)
+  );
+  assert.equal(ourRows.length, 1, "only the withdrawal.initiated row should match, not the 2 user.registered rows");
+  assert.equal(ourRows[0].userId, USER_IDS.page1);
+});
+
+test("eventType accepts a comma-separated list, e.g. for a whole category", async () => {
+  const res = await fetch(
+    `${baseUrl}/activity/recent?limit=50&eventType=withdrawal.initiated,user.registered`
+  );
+  const body = await res.json();
+
+  const ourUserIds = body.items
+    .map((i: any) => i.userId)
+    .filter((id: string) => [USER_IDS.page1, USER_IDS.page2, USER_IDS.page3].includes(id));
+  assert.deepEqual(new Set(ourUserIds), new Set([USER_IDS.page1, USER_IDS.page2, USER_IDS.page3]));
+});
+
+test("/activity/summary: count24h reflects only genuinely recent, non-excluded events; mostRecent ignores the time window", async () => {
+  const baseline = await (await fetch(`${baseUrl}/activity/summary`)).json();
+  const baselineCount = baseline.categories.bonuses.count24h;
+
+  const now = Date.now();
+  const oneHourAgo = new Date(now - 60 * 60 * 1000).toISOString();
+  const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Future-dated, guaranteed to be the absolute newest bonus event overall
+  // regardless of any real concurrent traffic in this shared dev DB — this
+  // is what mostRecent should point to, and it must NOT count toward
+  // count24h (it's outside the "now() and before" window).
+  const mostRecentRowId = await insertRow({
+    route: "/bonuses",
+    eventName: "bonus.activated",
+    eventId: "activity_test_summary_bonus_mostrecent",
+    userId: "bbbbbbbbbbbbbbbbbbbb0001",
+    data: { bonusAmount: 500, currency: "INR" },
+    receivedAt: "2099-06-01T00:00:00.000Z",
+  });
+
+  // Genuinely within the last 24 real hours — must increment count24h by
+  // exactly 1, but must NOT become mostRecent (the future row above wins).
+  await insertRow({
+    route: "/bonuses",
+    eventName: "bonus.activated",
+    eventId: "activity_test_summary_bonus_within24h",
+    userId: "bbbbbbbbbbbbbbbbbbbb0002",
+    data: { bonusAmount: 100, currency: "INR" },
+    receivedAt: oneHourAgo,
+  });
+
+  // Real, but 3 days old — outside the 24h window, must not affect count24h.
+  await insertRow({
+    route: "/bonuses",
+    eventName: "bonus.activated",
+    eventId: "activity_test_summary_bonus_outside24h",
+    userId: "bbbbbbbbbbbbbbbbbbbb0003",
+    data: { bonusAmount: 50, currency: "INR" },
+    receivedAt: threeDaysAgo,
+  });
+
+  // Same exclusion logic as /activity/recent must apply here too: a
+  // TEST_-prefixed userId, dated even further in the future than the
+  // legitimate mostRecent row above — if exclusion weren't applied to
+  // /activity/summary, this would incorrectly steal the mostRecent slot.
+  await insertRow({
+    route: "/bonuses",
+    eventName: "bonus.activated",
+    eventId: "activity_test_summary_bonus_excluded",
+    userId: "TEST_USER_SUMMARY_EXCLUDED",
+    data: { bonusAmount: 999999, currency: "INR" },
+    receivedAt: "2099-12-31T00:00:00.000Z",
+  });
+
+  const after = await (await fetch(`${baseUrl}/activity/summary`)).json();
+  const bonuses = after.categories.bonuses;
+
+  assert.equal(bonuses.count24h, baselineCount + 1, "exactly one of the four new rows falls in the real last-24h window");
+  assert.ok(bonuses.mostRecent, "expected a mostRecent bonus item");
+  assert.equal(bonuses.mostRecent.id, mostRecentRowId, "mostRecent must be the genuine newest row, not the excluded test row");
+  assert.equal(bonuses.mostRecent.description, "Bonus activated");
 });
