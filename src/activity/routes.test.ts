@@ -26,6 +26,8 @@ const EVENT_IDS = {
   excludedSyntheticUser: "activity_test_exclusion_3",
   betWon: "activity_test_bet_won",
   betLost: "activity_test_bet_lost",
+  casinoWon: "activity_test_casino_won",
+  casinoLost: "activity_test_casino_lost",
 };
 
 // Valid-looking 24-char hex Mongo ObjectIds, distinguishable per row.
@@ -36,6 +38,8 @@ const USER_IDS = {
   excludedTestUser: "TEST_USER_ACTIVITY_EXCLUDED",
   betWon: "cccccccccccccccccccc0001",
   betLost: "cccccccccccccccccccc0002",
+  casinoWon: "dddddddddddddddddddd0001",
+  casinoLost: "dddddddddddddddddddd0002",
 };
 
 let excludedTestEventIdRowId: string;
@@ -176,6 +180,41 @@ before(async () => {
     },
     receivedAt: "2098-01-01T00:00:01.000Z",
   });
+
+  // A won and a lost casino session, real payload shape (simpler than
+  // bets — no eventMarketInformation, just a flat gameName).
+  await insertRow({
+    route: "/casino",
+    eventName: "casino.session_settled",
+    eventId: EVENT_IDS.casinoWon,
+    userId: USER_IDS.casinoWon,
+    data: {
+      status: "won",
+      currency: "INR",
+      gameName: "spb_aviator",
+      stakeAmount: 500,
+      gameProvider: "spb",
+      returnAmount: 575,
+      winLossAmount: 75,
+    },
+    receivedAt: "2098-01-01T00:00:02.000Z",
+  });
+  await insertRow({
+    route: "/casino",
+    eventName: "casino.session_settled",
+    eventId: EVENT_IDS.casinoLost,
+    userId: USER_IDS.casinoLost,
+    data: {
+      status: "lost",
+      currency: "INR",
+      gameName: "spb_aviator",
+      stakeAmount: 100,
+      gameProvider: "spb",
+      returnAmount: 0,
+      winLossAmount: -100,
+    },
+    receivedAt: "2098-01-01T00:00:03.000Z",
+  });
 });
 
 const SUMMARY_EVENT_IDS = [
@@ -296,6 +335,27 @@ test("non-bet items have no outcome/tournamentName keys at all in the actual JSO
   assert.ok(item, "expected the seeded withdrawal row to be present");
   assert.ok(!("outcome" in item), "a non-bet item must not have an outcome key, not even undefined");
   assert.ok(!("tournamentName" in item), "a non-bet item must not have a tournamentName key, not even undefined");
+});
+
+test("a won casino session has the richer description plus outcome, but no tournamentName key", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=50`);
+  const body = await res.json();
+  const item = body.items.find((i: any) => i.userId === USER_IDS.casinoWon);
+
+  assert.ok(item, "expected the seeded won-casino-session row to be present");
+  assert.equal(item.description, "Casino session won — ₹575 returned (spb_aviator)");
+  assert.equal(item.outcome, "won");
+  assert.ok(!("tournamentName" in item), "casino sessions have no tournament equivalent — key must be absent");
+});
+
+test("a lost casino session has the richer description plus outcome (defensive branch, no real example on file)", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=50`);
+  const body = await res.json();
+  const item = body.items.find((i: any) => i.userId === USER_IDS.casinoLost);
+
+  assert.ok(item, "expected the seeded lost-casino-session row to be present");
+  assert.equal(item.description, "Casino session lost — ₹100 staked (spb_aviator)");
+  assert.equal(item.outcome, "lost");
 });
 
 test("eventType filter restricts to just the matching event type", async () => {

@@ -64,6 +64,30 @@ function describeBetSettled(data: Record<string, unknown>): string {
   return "Bet settled";
 }
 
+function gameName(data: Record<string, unknown>): string | undefined {
+  return typeof data.gameName === "string" && data.gameName.length > 0 ? data.gameName : undefined;
+}
+
+// Same pattern as describeBetSettled, simpler payload: no nested
+// eventMarketInformation, just a flat gameName ("spb_aviator") in its
+// place. "Casino session won — 575 INR returned (spb_aviator)" / "Casino
+// session lost — X staked (gameName)". Only "won" examples exist in real
+// traffic so far (see the investigation this followed) — the "lost"
+// branch is written defensively on the same status-field pattern bets
+// use, unverified against a real example, and covered by a test anyway.
+function describeCasinoSessionSettled(data: Record<string, unknown>): string {
+  const game = gameName(data);
+  const gameSuffix = game ? ` (${game})` : "";
+
+  if (data.status === "won") {
+    return `Casino session won — ${formatAmount(round2(data.returnAmount), data.currency)} returned${gameSuffix}`;
+  }
+  if (data.status === "lost") {
+    return `Casino session lost — ${formatAmount(round2(data.stakeAmount), data.currency)} staked${gameSuffix}`;
+  }
+  return "Casino session settled";
+}
+
 // Fallback for an event name we don't have a specific case for yet (a new
 // webhook type, or a documented-but-not-yet-seen one like
 // casino.session_settled) — "deposit.initiated" -> "Deposit initiated",
@@ -95,7 +119,7 @@ export function describeEvent(eventName: string, data: Record<string, unknown>):
     case "sportsbook.bet_settled":
       return describeBetSettled(data);
     case "casino.session_settled":
-      return "Casino session settled";
+      return describeCasinoSessionSettled(data);
     case "bonus.activated":
       return "Bonus activated";
     case "bonus.expired":
@@ -109,17 +133,26 @@ export function describeEvent(eventName: string, data: Record<string, unknown>):
 
 // Structured extras for the activity item shape (see shared.ts's
 // ActivityItem) that don't belong inside the description string itself —
-// `outcome` lets the frontend color-code a bet without parsing text,
-// `tournamentName` is meant as a secondary display line. Only ever
-// populated for sportsbook.bet_settled today; every other event type gets
-// {} (both fields absent, not just undefined-valued — see rowToItem).
+// `outcome` lets the frontend color-code a settled bet/session without
+// parsing text, `tournamentName` is meant as a secondary display line.
+// Populated for sportsbook.bet_settled and casino.session_settled; every
+// other event type gets {} (both fields absent, not just
+// undefined-valued — see rowToItem). Casino sessions have no
+// tournament/match equivalent in their payload (just a flat gameName,
+// already used in the description itself) — tournamentName is
+// deliberately left undefined there rather than repurposing gameProvider
+// or gameName into it.
 export function getEventMeta(
   eventName: string,
   data: Record<string, unknown>
 ): { outcome?: "won" | "lost"; tournamentName?: string } {
-  if (eventName !== "sportsbook.bet_settled") return {};
+  if (eventName !== "sportsbook.bet_settled" && eventName !== "casino.session_settled") return {};
 
   const outcome = data.status === "won" || data.status === "lost" ? data.status : undefined;
+
+  if (eventName === "casino.session_settled") {
+    return { outcome };
+  }
 
   const info = data.eventMarketInformation;
   const tournamentNameValue =
