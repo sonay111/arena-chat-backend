@@ -1,4 +1,4 @@
-import { describeEvent } from "./describe.js";
+import { describeEvent, getEventMeta } from "./describe.js";
 
 // The routes that carry genuine platform activity worth showing in a feed.
 // Deliberately explicit rather than "everything in raw_webhook_events" —
@@ -37,6 +37,13 @@ export type ActivityItem = {
   description: string;
   userId: string | null;
   timestamp: string;
+  // Both bet-settlement-only extras (see describe.ts's getEventMeta) —
+  // absent entirely for every other event type, not just undefined-valued:
+  // JSON.stringify (what res.json() uses under the hood) drops
+  // undefined-valued keys, so a non-bet item's response body never
+  // contains an "outcome" or "tournamentName" key at all.
+  outcome?: "won" | "lost";
+  tournamentName?: string;
 };
 
 export function rowToItem(row: {
@@ -46,12 +53,16 @@ export function rowToItem(row: {
   payload: any;
   received_at: Date;
 }): ActivityItem {
+  const data = row.payload?.data ?? {};
+  const { outcome, tournamentName } = getEventMeta(row.event_name, data);
   return {
     id: String(row.id),
     eventType: row.event_name,
-    description: describeEvent(row.event_name, row.payload?.data ?? {}),
+    description: describeEvent(row.event_name, data),
     userId: row.user_id,
     timestamp: row.received_at.toISOString(),
+    outcome,
+    tournamentName,
   };
 }
 

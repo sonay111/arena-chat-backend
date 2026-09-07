@@ -24,6 +24,8 @@ const EVENT_IDS = {
   excludedTestEventId: "test_activity_exclusion_1",
   excludedTestUser: "activity_test_exclusion_2",
   excludedSyntheticUser: "activity_test_exclusion_3",
+  betWon: "activity_test_bet_won",
+  betLost: "activity_test_bet_lost",
 };
 
 // Valid-looking 24-char hex Mongo ObjectIds, distinguishable per row.
@@ -32,6 +34,8 @@ const USER_IDS = {
   page2: "aaaaaaaaaaaaaaaaaaaa0002",
   page3: "aaaaaaaaaaaaaaaaaaaa0003",
   excludedTestUser: "TEST_USER_ACTIVITY_EXCLUDED",
+  betWon: "cccccccccccccccccccc0001",
+  betLost: "cccccccccccccccccccc0002",
 };
 
 let excludedTestEventIdRowId: string;
@@ -127,6 +131,51 @@ before(async () => {
     data: { amount: 1, currency: "INR" },
     receivedAt: "2099-01-01T00:00:06.000Z",
   });
+
+  // A won and a lost bet, real payload shape, for the outcome/tournamentName
+  // shape tests below.
+  await insertRow({
+    route: "/sportsbook",
+    eventName: "sportsbook.bet_settled",
+    eventId: EVENT_IDS.betWon,
+    userId: USER_IDS.betWon,
+    data: {
+      status: "won",
+      currency: "USDT",
+      stakeAmount: 5,
+      returnAmount: 7.75,
+      winLossAmount: 2.75,
+      eventMarketInformation: {
+        teamName: "over 0.5",
+        marketName: "1st innings over 2 - 3rd delivery Mi Cape Town SRL total",
+        tournamentName: "Mi Cape Town SRL vs Durban Super Giants SRL",
+      },
+    },
+    // Deliberately dated BEFORE the 2099-01-01 pagination block above (not
+    // after) so these two rows never leak into the "top 2 of the whole
+    // feed" assertions in the pagination tests, which fetch with no
+    // eventType filter.
+    receivedAt: "2098-01-01T00:00:00.000Z",
+  });
+  await insertRow({
+    route: "/sportsbook",
+    eventName: "sportsbook.bet_settled",
+    eventId: EVENT_IDS.betLost,
+    userId: USER_IDS.betLost,
+    data: {
+      status: "lost",
+      currency: "USDT",
+      stakeAmount: 2,
+      returnAmount: 0,
+      winLossAmount: -2,
+      eventMarketInformation: {
+        teamName: "South Delhi Superstars",
+        marketName: "Winner (incl. super over)",
+        tournamentName: "North Delhi Strikers vs South Delhi Superstars",
+      },
+    },
+    receivedAt: "2098-01-01T00:00:01.000Z",
+  });
 });
 
 const SUMMARY_EVENT_IDS = [
@@ -212,6 +261,41 @@ test("withdrawal.initiated produces a description with the real amount and curre
 test("an invalid 'before' cursor is rejected with 400, not a crash", async () => {
   const res = await fetch(`${baseUrl}/activity/recent?before=not-a-real-date`);
   assert.equal(res.status, 400);
+});
+
+test("a won bet has the richer description plus outcome + tournamentName in the actual JSON response", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=50`);
+  const body = await res.json();
+  const item = body.items.find((i: any) => i.userId === USER_IDS.betWon);
+
+  assert.ok(item, "expected the seeded won-bet row to be present");
+  assert.equal(
+    item.description,
+    "Bet won — 7.75 USDT returned (1st innings over 2 - 3rd delivery Mi Cape Town SRL total)"
+  );
+  assert.equal(item.outcome, "won");
+  assert.equal(item.tournamentName, "Mi Cape Town SRL vs Durban Super Giants SRL");
+});
+
+test("a lost bet has the richer description plus outcome + tournamentName in the actual JSON response", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=50`);
+  const body = await res.json();
+  const item = body.items.find((i: any) => i.userId === USER_IDS.betLost);
+
+  assert.ok(item, "expected the seeded lost-bet row to be present");
+  assert.equal(item.description, "Bet lost — 2 USDT staked (Winner (incl. super over))");
+  assert.equal(item.outcome, "lost");
+  assert.equal(item.tournamentName, "North Delhi Strikers vs South Delhi Superstars");
+});
+
+test("non-bet items have no outcome/tournamentName keys at all in the actual JSON response", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=50`);
+  const body = await res.json();
+  const item = body.items.find((i: any) => i.userId === USER_IDS.page1); // withdrawal.initiated
+
+  assert.ok(item, "expected the seeded withdrawal row to be present");
+  assert.ok(!("outcome" in item), "a non-bet item must not have an outcome key, not even undefined");
+  assert.ok(!("tournamentName" in item), "a non-bet item must not have a tournamentName key, not even undefined");
 });
 
 test("eventType filter restricts to just the matching event type", async () => {

@@ -23,6 +23,47 @@ function withAmount(label: string, amount: unknown, currency: unknown): string {
   return formatted ? `${label} — ${formatted}` : label;
 }
 
+// returnAmount/stakeAmount arrive as JS floats computed upstream (e.g.
+// 1.5999999999999996) — real sportsbook.bet_settled traffic confirmed this
+// (see the investigation that led to this function). Round for display
+// only; never used for anything that needs to add up exactly.
+function round2(amount: unknown): unknown {
+  return typeof amount === "number" ? Math.round(amount * 100) / 100 : amount;
+}
+
+function marketName(data: Record<string, unknown>): string | undefined {
+  const info = data.eventMarketInformation;
+  if (info && typeof info === "object" && "marketName" in info) {
+    const name = (info as Record<string, unknown>).marketName;
+    return typeof name === "string" && name.length > 0 ? name : undefined;
+  }
+  return undefined;
+}
+
+// "Bet won — 7.75 USDT returned (1st innings over 2 - 3rd delivery Mi Cape
+// Town SRL total)" / "Bet lost — 2 USDT staked (Winner (incl. super
+// over))". Deliberately uses returnAmount (won) / stakeAmount (lost), not
+// winLossAmount — winLossAmount is itself a subtraction done upstream and
+// inherits the same float imprecision, with no benefit over recomputing
+// from the two source fields. marketName carries the actual bet
+// detail — teamName is NOT used here: real traffic showed it holds a team
+// name for one sport, a player's name for another, and the bet selection
+// itself (e.g. "over 0.5") for a third — not reliable across sports.
+function describeBetSettled(data: Record<string, unknown>): string {
+  const market = marketName(data);
+  const marketSuffix = market ? ` (${market})` : "";
+
+  if (data.status === "won") {
+    return `Bet won — ${formatAmount(round2(data.returnAmount), data.currency)} returned${marketSuffix}`;
+  }
+  if (data.status === "lost") {
+    return `Bet lost — ${formatAmount(round2(data.stakeAmount), data.currency)} staked${marketSuffix}`;
+  }
+  // Any other/unknown status (e.g. void, cashout — never seen in real
+  // traffic so far) falls back to the original plain label.
+  return "Bet settled";
+}
+
 // Fallback for an event name we don't have a specific case for yet (a new
 // webhook type, or a documented-but-not-yet-seen one like
 // casino.session_settled) — "deposit.initiated" -> "Deposit initiated",
@@ -52,7 +93,7 @@ export function describeEvent(eventName: string, data: Record<string, unknown>):
     case "withdrawal.status_updated":
       return withAmount("Withdrawal status updated", data.amount, data.currency);
     case "sportsbook.bet_settled":
-      return "Bet settled";
+      return describeBetSettled(data);
     case "casino.session_settled":
       return "Casino session settled";
     case "bonus.activated":
@@ -64,4 +105,31 @@ export function describeEvent(eventName: string, data: Record<string, unknown>):
     default:
       return humanizeEventName(eventName);
   }
+}
+
+// Structured extras for the activity item shape (see shared.ts's
+// ActivityItem) that don't belong inside the description string itself —
+// `outcome` lets the frontend color-code a bet without parsing text,
+// `tournamentName` is meant as a secondary display line. Only ever
+// populated for sportsbook.bet_settled today; every other event type gets
+// {} (both fields absent, not just undefined-valued — see rowToItem).
+export function getEventMeta(
+  eventName: string,
+  data: Record<string, unknown>
+): { outcome?: "won" | "lost"; tournamentName?: string } {
+  if (eventName !== "sportsbook.bet_settled") return {};
+
+  const outcome = data.status === "won" || data.status === "lost" ? data.status : undefined;
+
+  const info = data.eventMarketInformation;
+  const tournamentNameValue =
+    info && typeof info === "object" && "tournamentName" in info
+      ? (info as Record<string, unknown>).tournamentName
+      : undefined;
+  const tournamentName =
+    typeof tournamentNameValue === "string" && tournamentNameValue.length > 0
+      ? tournamentNameValue
+      : undefined;
+
+  return { outcome, tournamentName };
 }
