@@ -94,6 +94,41 @@ test("valid signature + envelope: passes and stores correctly", async () => {
   await cleanupPlayer(userId);
 });
 
+// Real traffic confirmed 2026-09: only user.registered carries a country
+// field (ISO 3166-1 alpha-2, e.g. "IN"), and it's a distinct field from
+// the pre-existing country_code column (a phone dialing code from a
+// different webhook shape) — this must land in its own column, not get
+// conflated with or overwrite country_code.
+test("user.registered with a country field: persists to players.country", async () => {
+  const eventId = "test_evt_country_1";
+  const userId = "TEST_PLAYER_COUNTRY_1";
+  const envelope = {
+    event: "user.registered",
+    eventId,
+    timestamp: "2026-08-14T00:00:00.000Z",
+    data: {
+      _id: userId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      is_blocked: false,
+      username: "country_test_user",
+      country: "IN",
+    },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status, body } = await post("/users", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+  assert.equal(body?.ok, true);
+
+  const player = await pool.query("SELECT country, country_code FROM players WHERE id = $1", [userId]);
+  assert.equal(player.rowCount, 1);
+  assert.equal(player.rows[0].country, "IN");
+  assert.equal(player.rows[0].country_code, null, "country must not be conflated with the separate country_code column");
+
+  await cleanupEventId(eventId);
+  await cleanupPlayer(userId);
+});
+
 test("invalid signature: rejected, but the raw event is still persisted", async () => {
   const eventId = "test_evt_invalid_sig_1";
   const userId = "TEST_PLAYER_INVALID_SIG_1";

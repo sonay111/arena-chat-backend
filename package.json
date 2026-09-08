@@ -10,6 +10,7 @@
     "db:setup": "tsx src/db-setup.ts",
     "dev": "tsx src/server.ts",
     "tail:webhooks": "tsx src/tail-webhook-events.ts",
+    "backfill:player-countries": "tsx src/backfill-player-countries.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:webhooks": "bash test-fixtures/webhooks/send-all.sh",
     "test:webhooks:auth": "tsx --test src/webhooks/*.test.ts",

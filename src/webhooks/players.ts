@@ -44,8 +44,16 @@ export async function upsertPlayerCore(user: {
 }
 
 // Only the /users registration webhook carries these extra fields
-// (firstName, email, tracker/affiliate/UTM data). This is the fuller upsert,
-// used once per player, when they first register.
+// (firstName, email, tracker/affiliate/UTM data, country). This is the
+// fuller upsert, used once per player, when they first register.
+//
+// country (ISO 3166-1 alpha-2, e.g. "IN", "AM") is confirmed 2026-09 to
+// only ever appear on this registration payload — no other webhook event
+// type carries it, and the CRM API's own responses don't return it
+// either (see the investigation that led to this column). It is NOT the
+// same field as country_code below (a phone dialing code, populated by
+// upsertPlayerCore from a completely different payload shape) — kept as
+// its own column deliberately.
 export async function upsertPlayerFromRegistration(user: {
   _id: string;
   createdAt?: string;
@@ -54,6 +62,7 @@ export async function upsertPlayerFromRegistration(user: {
   firstName?: string;
   email?: string;
   phone?: string;
+  country?: string;
   tracker?: string;
   campaignTag?: string;
   affid?: string;
@@ -68,16 +77,17 @@ export async function upsertPlayerFromRegistration(user: {
 }) {
   await pool.query(
     `INSERT INTO players (
-       id, username, first_name, email, phone, tracker, campaign_tag, affid,
+       id, username, first_name, email, phone, country, tracker, campaign_tag, affid,
        provider, parent_provider, click_id, utm_source, utm_medium,
        utm_campaign, utm_content, pixel_id, is_blocked, registered_at
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      ON CONFLICT (id) DO UPDATE SET
        username         = EXCLUDED.username,
        first_name       = EXCLUDED.first_name,
        email            = EXCLUDED.email,
        phone            = EXCLUDED.phone,
+       country          = EXCLUDED.country,
        tracker          = EXCLUDED.tracker,
        campaign_tag     = EXCLUDED.campaign_tag,
        affid            = EXCLUDED.affid,
@@ -98,6 +108,7 @@ export async function upsertPlayerFromRegistration(user: {
       user.firstName ?? null,
       user.email ?? null,
       user.phone ?? null,
+      user.country ?? null,
       user.tracker ?? null,
       user.campaignTag ?? null,
       user.affid ?? null,

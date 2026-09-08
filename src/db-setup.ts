@@ -150,6 +150,16 @@ ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_status TEXT;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS screenshot TEXT;
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS is_reapproved BOOLEAN;
 
+-- Real per-player country, confirmed 2026-09 via raw_webhook_events
+-- investigation: only the /users registration payload carries this (an
+-- ISO 3166-1 alpha-2 code, e.g. "IN", "AM") — no other webhook event type
+-- has it, and it's NOT the same thing as the pre-existing country_code
+-- column above (that's a phone dialing code like "91", fed by the
+-- smaller "shared user object" on payments/bets/bonuses webhooks — see
+-- upsertPlayerCore). Deliberately a separate column so the two distinct
+-- real data points never get conflated.
+ALTER TABLE players ADD COLUMN IF NOT EXISTS country TEXT;
+
 -- Dedupe gate for the withdrawal-delay detector (src/alerts/): once a
 -- withdrawal has been flagged as delayed, it's never re-flagged, even
 -- after it eventually completes. NOT NULL DEFAULT false so every existing
