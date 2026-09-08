@@ -28,6 +28,9 @@ const EVENT_IDS = {
   betLost: "activity_test_bet_lost",
   casinoWon: "activity_test_casino_won",
   casinoLost: "activity_test_casino_lost",
+  countryKnown: "activity_test_country_known",
+  countryNullRow: "activity_test_country_null_row",
+  countryNoRow: "activity_test_country_no_row",
 };
 
 // Valid-looking 24-char hex Mongo ObjectIds, distinguishable per row.
@@ -40,6 +43,13 @@ const USER_IDS = {
   betLost: "cccccccccccccccccccc0002",
   casinoWon: "dddddddddddddddddddd0001",
   casinoLost: "dddddddddddddddddddd0002",
+  // Three flavors covering the full country-filter surface: a real known
+  // country, a players row that exists but has no country (unknown via
+  // NULL), and no players row at all (unknown via absence — LEFT JOIN
+  // unifies both into the same "unknown" bucket, matching /players/countries).
+  countryKnown: "ffffffffffffffffffff0001",
+  countryNullRow: "ffffffffffffffffffff0002",
+  countryNoRow: "ffffffffffffffffffff0003",
 };
 
 let excludedTestEventIdRowId: string;
@@ -215,6 +225,38 @@ before(async () => {
     },
     receivedAt: "2098-01-01T00:00:03.000Z",
   });
+
+  // Country-filter fixtures: one player with a real (fake but valid-shaped)
+  // country, one whose players row exists but has a NULL country, one with
+  // no players row at all. "ZZ" is ISO's reserved user-assigned code —
+  // chosen so it can never collide with a real country value.
+  await insertRow({
+    route: "/alerts/refresh-detected",
+    eventName: "player.refresh_detected",
+    eventId: EVENT_IDS.countryKnown,
+    userId: USER_IDS.countryKnown,
+    data: { refreshCount: 1 },
+    receivedAt: "2097-06-01T00:00:00.000Z",
+  });
+  await insertRow({
+    route: "/alerts/refresh-detected",
+    eventName: "player.refresh_detected",
+    eventId: EVENT_IDS.countryNullRow,
+    userId: USER_IDS.countryNullRow,
+    data: { refreshCount: 1 },
+    receivedAt: "2097-06-01T00:00:01.000Z",
+  });
+  await insertRow({
+    route: "/alerts/refresh-detected",
+    eventName: "player.refresh_detected",
+    eventId: EVENT_IDS.countryNoRow,
+    userId: USER_IDS.countryNoRow,
+    data: { refreshCount: 1 },
+    receivedAt: "2097-06-01T00:00:02.000Z",
+  });
+  await pool.query("INSERT INTO players (id, country) VALUES ($1, 'ZZ')", [USER_IDS.countryKnown]);
+  await pool.query("INSERT INTO players (id, country) VALUES ($1, NULL)", [USER_IDS.countryNullRow]);
+  // USER_IDS.countryNoRow deliberately gets no players row at all.
 });
 
 const SUMMARY_EVENT_IDS = [
@@ -229,6 +271,7 @@ after(async () => {
     `DELETE FROM raw_webhook_events WHERE event_id = ANY($1)`,
     [[...Object.values(EVENT_IDS), ...SUMMARY_EVENT_IDS]]
   );
+  await pool.query("DELETE FROM players WHERE id = ANY($1)", [[USER_IDS.countryKnown, USER_IDS.countryNullRow]]);
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   await pool.end();
 });
@@ -443,4 +486,46 @@ test("/activity/summary: count24h reflects only genuinely recent, non-excluded e
   assert.ok(bonuses.mostRecent, "expected a mostRecent bonus item");
   assert.equal(bonuses.mostRecent.id, mostRecentRowId, "mostRecent must be the genuine newest row, not the excluded test row");
   assert.equal(bonuses.mostRecent.description, "Bonus activated");
+});
+
+test("country filter: a real country code returns only players with that exact country", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=200&country=ZZ`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const userIds = body.items.map((i: any) => i.userId);
+
+  assert.ok(userIds.includes(USER_IDS.countryKnown), "the player with country=ZZ must appear");
+  assert.ok(!userIds.includes(USER_IDS.countryNullRow), "a player with a NULL country must not match a real country code");
+  assert.ok(!userIds.includes(USER_IDS.countryNoRow), "a player with no players row at all must not match a real country code");
+});
+
+test("country filter: 'unknown' matches both a NULL-country players row and no players row at all", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=200&country=unknown`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const userIds = body.items.map((i: any) => i.userId);
+
+  assert.ok(userIds.includes(USER_IDS.countryNullRow), "a players row with NULL country must count as unknown");
+  assert.ok(userIds.includes(USER_IDS.countryNoRow), "no players row at all must also count as unknown");
+  assert.ok(!userIds.includes(USER_IDS.countryKnown), "a player with a real country must not appear under 'unknown'");
+
+  // Case-insensitive: "UNKNOWN" must behave identically.
+  const resUpper = await fetch(`${baseUrl}/activity/recent?limit=200&country=UNKNOWN`);
+  const bodyUpper = await resUpper.json();
+  const userIdsUpper = bodyUpper.items.map((i: any) => i.userId);
+  assert.ok(userIdsUpper.includes(USER_IDS.countryNullRow));
+  assert.ok(userIdsUpper.includes(USER_IDS.countryNoRow));
+});
+
+test("no country param: behaves exactly as before this filter existed — nothing is excluded by the new LEFT JOIN", async () => {
+  const res = await fetch(`${baseUrl}/activity/recent?limit=200`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const userIds = body.items.map((i: any) => i.userId);
+
+  // All three country-filter fixtures — real country, NULL-country row,
+  // and no row at all — must appear when country isn't specified at all.
+  assert.ok(userIds.includes(USER_IDS.countryKnown));
+  assert.ok(userIds.includes(USER_IDS.countryNullRow));
+  assert.ok(userIds.includes(USER_IDS.countryNoRow));
 });
