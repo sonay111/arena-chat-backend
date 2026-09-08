@@ -16,7 +16,8 @@
     "test:webhooks:auth": "tsx --test src/webhooks/*.test.ts",
     "test:guardrails": "tsx --test src/guardrails/*.test.ts src/guardrails/rules/*.test.ts src/guardrails/lib/*.test.ts",
     "test:alerts": "tsx --test src/alerts/*.test.ts",
-    "test:activity": "tsx --test src/activity/*.test.ts"
+    "test:activity": "tsx --test src/activity/*.test.ts",
+    "test:players": "tsx --test src/players/*.test.ts"
   },
   "keywords": [],
   "author": "",

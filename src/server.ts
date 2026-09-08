@@ -6,6 +6,7 @@ import { webhooksRouter } from "./webhooks/index.js";
 import { getUsers, CrmIpNotAllowedError } from "./crm/index.js";
 import { alertsRouter, startWithdrawalDelayCheck, refreshAlertsRouter } from "./alerts/index.js";
 import { activityRouter } from "./activity/index.js";
+import { playersRouter } from "./players/index.js";
 
 // TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
 // Satyam's team yet, so every real CRM lookup below currently fails with
@@ -42,6 +43,7 @@ app.use(webhooksRouter);
 app.use(alertsRouter);
 app.use(refreshAlertsRouter);
 app.use(activityRouter);
+app.use(playersRouter);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later
