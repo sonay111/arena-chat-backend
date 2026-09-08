@@ -80,3 +80,18 @@ export const CATEGORIES: Record<string, string[]> = {
   refreshes: ["player.refresh_detected"],
   registrations: ["user.registered"],
 };
+
+// Shared by every endpoint that supports ?country=IN / ?country=unknown
+// (src/activity/routes.ts, src/alerts/routes.ts) so the parsing rules
+// can't drift between them. "IN" matches players.country = 'IN' exactly;
+// "unknown" (case-insensitive) matches a player with no country on file
+// at all — same definition as /players/countries' unknownCount: no
+// players row, or a players row with country IS NULL. No validation
+// against a fixed list of real codes: an unrecognized code just matches
+// zero rows, same philosophy as eventType.
+export function parseCountry(raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = String(raw).trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.toLowerCase() === "unknown" ? "unknown" : trimmed.toUpperCase();
+}

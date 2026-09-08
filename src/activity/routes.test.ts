@@ -257,7 +257,63 @@ before(async () => {
   await pool.query("INSERT INTO players (id, country) VALUES ($1, 'ZZ')", [USER_IDS.countryKnown]);
   await pool.query("INSERT INTO players (id, country) VALUES ($1, NULL)", [USER_IDS.countryNullRow]);
   // USER_IDS.countryNoRow deliberately gets no players row at all.
+
+  // Dedicated fixtures for /activity/summary's country filter — using
+  // "deposits" specifically because it's the one category with zero
+  // other fixtures anywhere in this file. "registrations" was tried
+  // first, but USER_IDS.page2/page3 (the pagination fixtures) are ALSO
+  // user.registered events, dated 2099-01-01 — any date late enough to
+  // beat them for "registrations category's overall newest" either broke
+  // the unfiltered cross-category top-2 pagination test (if newer than
+  // page2) or still lost to them (if not). Deposits sidesteps this
+  // entirely: dated 2098-06, safely below the 2099 pagination block, so
+  // it can never enter the unfiltered top-2 either, while still beating
+  // any real 2026 deposit activity for "deposits category's newest."
+  // Deliberately ordered so the KNOWN-country row is the overall newest
+  // of the three — that makes "no country param" and "country=ZZ" both
+  // correctly return it (proving omitting country doesn't accidentally
+  // apply some other filter), while "country=unknown" correctly returns
+  // a different row.
+  await insertRow({
+    route: "/deposits",
+    eventName: "deposit.completed",
+    eventId: "activity_test_summary_country_no_row",
+    userId: SUMMARY_COUNTRY_USER_IDS.noRow,
+    data: { amount: 10, currency: "INR" },
+    receivedAt: "2098-06-01T00:00:00.000Z",
+  });
+  await insertRow({
+    route: "/deposits",
+    eventName: "deposit.completed",
+    eventId: "activity_test_summary_country_null_row",
+    userId: SUMMARY_COUNTRY_USER_IDS.nullRow,
+    data: { amount: 20, currency: "INR" },
+    receivedAt: "2098-06-01T00:00:01.000Z",
+  });
+  await insertRow({
+    route: "/deposits",
+    eventName: "deposit.completed",
+    eventId: "activity_test_summary_country_known",
+    userId: SUMMARY_COUNTRY_USER_IDS.known,
+    data: { amount: 30, currency: "INR" },
+    receivedAt: "2098-06-01T00:00:02.000Z",
+  });
+  await pool.query("INSERT INTO players (id, country) VALUES ($1, 'ZZ')", [SUMMARY_COUNTRY_USER_IDS.known]);
+  await pool.query("INSERT INTO players (id, country) VALUES ($1, NULL)", [SUMMARY_COUNTRY_USER_IDS.nullRow]);
+  // SUMMARY_COUNTRY_USER_IDS.noRow deliberately gets no players row at all.
 });
+
+const SUMMARY_COUNTRY_USER_IDS = {
+  known: "eeeeeeeeeeeeeeeeeeee0001",
+  nullRow: "eeeeeeeeeeeeeeeeeeee0002",
+  noRow: "eeeeeeeeeeeeeeeeeeee0003",
+};
+
+const SUMMARY_COUNTRY_EVENT_IDS = [
+  "activity_test_summary_country_no_row",
+  "activity_test_summary_country_null_row",
+  "activity_test_summary_country_known",
+];
 
 const SUMMARY_EVENT_IDS = [
   "activity_test_summary_bonus_mostrecent",
@@ -269,9 +325,11 @@ const SUMMARY_EVENT_IDS = [
 after(async () => {
   await pool.query(
     `DELETE FROM raw_webhook_events WHERE event_id = ANY($1)`,
-    [[...Object.values(EVENT_IDS), ...SUMMARY_EVENT_IDS]]
+    [[...Object.values(EVENT_IDS), ...SUMMARY_EVENT_IDS, ...SUMMARY_COUNTRY_EVENT_IDS]]
   );
-  await pool.query("DELETE FROM players WHERE id = ANY($1)", [[USER_IDS.countryKnown, USER_IDS.countryNullRow]]);
+  await pool.query("DELETE FROM players WHERE id = ANY($1)", [
+    [USER_IDS.countryKnown, USER_IDS.countryNullRow, SUMMARY_COUNTRY_USER_IDS.known, SUMMARY_COUNTRY_USER_IDS.nullRow],
+  ]);
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   await pool.end();
 });
@@ -528,4 +586,43 @@ test("no country param: behaves exactly as before this filter existed — nothin
   assert.ok(userIds.includes(USER_IDS.countryKnown));
   assert.ok(userIds.includes(USER_IDS.countryNullRow));
   assert.ok(userIds.includes(USER_IDS.countryNoRow));
+});
+
+test("/activity/summary: country filter — a real country code scopes mostRecent to just that country", async () => {
+  const res = await fetch(`${baseUrl}/activity/summary?country=ZZ`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const deposits = body.categories.deposits;
+
+  assert.equal(deposits.count24h, 0, "no real player will ever have the literal fake code ZZ, and the fixture is dated outside the 24h window");
+  assert.ok(deposits.mostRecent, "expected the ZZ-country fixture to be the sole match");
+  assert.equal(deposits.mostRecent.userId, SUMMARY_COUNTRY_USER_IDS.known);
+});
+
+test("/activity/summary: country=unknown scopes mostRecent to a player with no country, excluding the known-country fixture", async () => {
+  const res = await fetch(`${baseUrl}/activity/summary?country=unknown`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const deposits = body.categories.deposits;
+
+  assert.ok(deposits.mostRecent, "expected an 'unknown' mostRecent");
+  assert.notEqual(deposits.mostRecent.userId, SUMMARY_COUNTRY_USER_IDS.known, "the known-ZZ-country fixture must not appear under 'unknown'");
+  // Of the two unknown fixtures, nullRow is the newer one (registered
+  // after noRow) — it must win, proving "unknown" isn't accidentally
+  // scoped to just one of the two ways a player can be unknown.
+  assert.equal(deposits.mostRecent.userId, SUMMARY_COUNTRY_USER_IDS.nullRow);
+});
+
+test("/activity/summary: no country param — behaves exactly as before this filter existed", async () => {
+  const res = await fetch(`${baseUrl}/activity/summary`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const deposits = body.categories.deposits;
+
+  // The known-ZZ-country fixture is the genuine overall newest of the
+  // three (dated after both unknown ones) — omitting country must still
+  // surface it, proving nothing defaults to filtering by "unknown" or any
+  // other value when the param is absent.
+  assert.ok(deposits.mostRecent);
+  assert.equal(deposits.mostRecent.userId, SUMMARY_COUNTRY_USER_IDS.known);
 });

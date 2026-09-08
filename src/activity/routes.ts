@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { pool } from "../db.js";
-import { ACTIVITY_ROUTES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID, CATEGORIES, rowToItem } from "./shared.js";
+import { ACTIVITY_ROUTES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID, CATEGORIES, rowToItem, parseCountry } from "./shared.js";
 import type { ActivityItem } from "./shared.js";
 
 export const activityRouter = Router();
@@ -20,18 +20,6 @@ function parseEventTypes(raw: unknown): string[] | undefined {
   const flattened = values.flatMap((v) => String(v).split(","));
   const cleaned = flattened.map((v) => v.trim()).filter((v) => v.length > 0);
   return cleaned.length > 0 ? cleaned : undefined;
-}
-
-// "IN" matches players.country = 'IN' exactly; "unknown" (case-insensitive)
-// matches a player with no country on file at all — same definition as
-// /players/countries' unknownCount: no players row, or a players row with
-// country IS NULL. No validation against a fixed list of real codes: an
-// unrecognized code just matches zero rows, same philosophy as eventType.
-function parseCountry(raw: unknown): string | undefined {
-  if (raw === undefined) return undefined;
-  const trimmed = String(raw).trim();
-  if (trimmed.length === 0) return undefined;
-  return trimmed.toLowerCase() === "unknown" ? "unknown" : trimmed.toUpperCase();
 }
 
 // GET /activity/recent?limit=30&before=<ISO timestamp>&eventType=withdrawal.initiated,withdrawal.completed&country=IN
@@ -101,15 +89,21 @@ activityRouter.get("/activity/recent", async (req: Request, res: Response) => {
   }
 });
 
-// GET /activity/summary
+// GET /activity/summary?country=IN
 // One row per category (see CATEGORIES in shared.ts): how many events of
 // that category landed in the last 24 hours, and the single most recent
 // one regardless of age. The two are intentionally on different time
 // windows — count24h answers "how much just happened," mostRecent answers
 // "what's the latest thing that happened at all," which stays useful even
 // for a quiet category (count24h: 0 but mostRecent: something from days
-// ago is more informative than mostRecent: null).
-activityRouter.get("/activity/summary", async (_req: Request, res: Response) => {
+// ago is more informative than mostRecent: null). `country` is the same
+// optional filter as /activity/recent (real code, or "unknown"), via the
+// same LEFT JOIN + parseCountry() — needed so the Live Activity tile grid
+// (this endpoint) and the detail feed underneath (/activity/recent) never
+// disagree when a country filter is applied on the dashboard.
+activityRouter.get("/activity/summary", async (req: Request, res: Response) => {
+  const country = parseCountry(req.query.country);
+
   try {
     const categoryEntries = Object.entries(CATEGORIES);
 
@@ -118,29 +112,41 @@ activityRouter.get("/activity/summary", async (_req: Request, res: Response) => 
         const [countResult, mostRecentResult] = await Promise.all([
           pool.query(
             `SELECT count(*)::int AS count
-             FROM raw_webhook_events
-             WHERE event_name = ANY($1)
-               AND route = ANY($2)
-               AND user_id ~ $3
-               AND user_id != $4
-               AND event_id NOT LIKE 'test\\_%' ESCAPE '\\'
-               AND event_id NOT LIKE 'tail\\_%' ESCAPE '\\'
-               AND received_at > now() - interval '24 hours'
-               AND received_at <= now()`,
-            [eventTypes, ACTIVITY_ROUTES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID]
+             FROM raw_webhook_events r
+             LEFT JOIN players p ON p.id = r.user_id
+             WHERE r.event_name = ANY($1)
+               AND r.route = ANY($2)
+               AND r.user_id ~ $3
+               AND r.user_id != $4
+               AND r.event_id NOT LIKE 'test\\_%' ESCAPE '\\'
+               AND r.event_id NOT LIKE 'tail\\_%' ESCAPE '\\'
+               AND r.received_at > now() - interval '24 hours'
+               AND r.received_at <= now()
+               AND (
+                 $5::text IS NULL
+                 OR ($5 = 'unknown' AND p.country IS NULL)
+                 OR ($5 != 'unknown' AND p.country = $5)
+               )`,
+            [eventTypes, ACTIVITY_ROUTES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID, country ?? null]
           ),
           pool.query(
-            `SELECT id, event_name, user_id, payload, received_at
-             FROM raw_webhook_events
-             WHERE event_name = ANY($1)
-               AND route = ANY($2)
-               AND user_id ~ $3
-               AND user_id != $4
-               AND event_id NOT LIKE 'test\\_%' ESCAPE '\\'
-               AND event_id NOT LIKE 'tail\\_%' ESCAPE '\\'
-             ORDER BY received_at DESC
+            `SELECT r.id, r.event_name, r.user_id, r.payload, r.received_at
+             FROM raw_webhook_events r
+             LEFT JOIN players p ON p.id = r.user_id
+             WHERE r.event_name = ANY($1)
+               AND r.route = ANY($2)
+               AND r.user_id ~ $3
+               AND r.user_id != $4
+               AND r.event_id NOT LIKE 'test\\_%' ESCAPE '\\'
+               AND r.event_id NOT LIKE 'tail\\_%' ESCAPE '\\'
+               AND (
+                 $5::text IS NULL
+                 OR ($5 = 'unknown' AND p.country IS NULL)
+                 OR ($5 != 'unknown' AND p.country = $5)
+               )
+             ORDER BY r.received_at DESC
              LIMIT 1`,
-            [eventTypes, ACTIVITY_ROUTES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID]
+            [eventTypes, ACTIVITY_ROUTES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID, country ?? null]
           ),
         ]);
 
