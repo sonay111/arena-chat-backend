@@ -12,10 +12,9 @@ import type {
 type PageParams = { page?: number; limit?: number };
 type DateRangeParams = { start_date?: string; end_date?: string };
 
-// Section APIs (deposit/withdrawal/sportsbook/casino/bonuses) nest
-// pagination inside `data` as totalPage/currentPage/totalData. get-users
-// does not follow this shape (see getUsers below), so this helper is only
-// used by the other five.
+// Section APIs (deposit/withdrawal/sportsbook/casino/bonuses), and now
+// get-users too (confirmed 2026-09-10, see below), nest pagination inside
+// `data` as totalPage/currentPage/totalData.
 function toPagination(data: { currentPage: number; totalPage: number; totalData: number }): Pagination {
   return {
     page: data.currentPage,
@@ -24,20 +23,36 @@ function toPagination(data: { currentPage: number; totalPage: number; totalData:
   };
 }
 
+type GetUsersResponse = {
+  message: string;
+  data: { users: CrmUser[]; totalPage: number; currentPage: number; totalData: number };
+};
+
+// Pure parsing step, split out from getUsers so it's directly testable
+// against a real captured response shape without needing a live network
+// call or a mocking library (neither exists elsewhere in this project) —
+// same rationale as isValidSignature in src/webhooks/auth.ts.
+export function parseGetUsersResponse(json: GetUsersResponse): { users: CrmUser[]; pagination: Pagination } {
+  return { users: json.data.users, pagination: toPagination(json.data) };
+}
+
 // /crm/get-users — the doc's example response is `{ message, data: [...] }`,
-// an array directly, with no pagination fields shown. It also has no
-// documented :userId path variant (unlike every other endpoint below).
+// a flat array directly, with no pagination fields shown.
 //
-// UNVERIFIED: whether a `userId` query param actually filters this down to
-// one user, or whether it's ignored and always returns the full list. The
-// "User APIs support both path and query style" note in the doc is written
-// right before the endpoint matrix and its two path-style examples are
-// both for deposit-history — it's not clear it covers get-users too. Worth
-// confirming once we have API access; getPlayerContext (below) depends on
-// this working.
-export async function getUsers(params: PageParams & { userId?: string } = {}): Promise<{ users: CrmUser[] }> {
-  const json = await crmGet<{ message: string; data: CrmUser[] }>("/crm/get-users", params);
-  return { users: json.data };
+// CONFIRMED 2026-09-10, after Satyam updated the API: real responses are
+// actually `{ status, message, data: { users: [...], totalPage,
+// currentPage, totalData } }` — an envelope matching every other section
+// API below, not the flat array the doc showed. The doc's shape was never
+// actually seen in real traffic even before this change (see the git
+// history of this file) — this just makes it official and adds
+// pagination to match. The userId query param has been directly confirmed
+// to filter to that one user (see getPlayerContext below, which depends
+// on it).
+export async function getUsers(
+  params: PageParams & { userId?: string } = {}
+): Promise<{ users: CrmUser[]; pagination: Pagination }> {
+  const json = await crmGet<GetUsersResponse>("/crm/get-users", params);
+  return parseGetUsersResponse(json);
 }
 
 export async function getDepositHistory(

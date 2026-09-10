@@ -11,13 +11,15 @@
     "dev": "tsx src/server.ts",
     "tail:webhooks": "tsx src/tail-webhook-events.ts",
     "backfill:player-countries": "tsx src/backfill-player-countries.ts",
+    "backfill:player-countries-via-crm": "tsx src/backfill-player-countries-via-crm.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:webhooks": "bash test-fixtures/webhooks/send-all.sh",
     "test:webhooks:auth": "tsx --test src/webhooks/*.test.ts",
     "test:guardrails": "tsx --test src/guardrails/*.test.ts src/guardrails/rules/*.test.ts src/guardrails/lib/*.test.ts",
     "test:alerts": "tsx --test src/alerts/*.test.ts",
     "test:activity": "tsx --test src/activity/*.test.ts",
-    "test:players": "tsx --test src/players/*.test.ts"
+    "test:players": "tsx --test src/players/*.test.ts",
+    "test:crm": "tsx --test src/crm/*.test.ts"
   },
   "keywords": [],
   "author": "",

@@ -10,6 +10,12 @@ export type CrmUser = {
   firstName?: string;
   email?: string;
   phone?: string;
+  // A phone dialing code (e.g. "91", "374"), NOT an ISO 3166-1 alpha-2
+  // country code — confirmed 2026-09-10 against real adminapiqa traffic
+  // after Satyam's API update. Added to getUsers' response at that point;
+  // absent before. See src/crm/dialing-code-to-country.ts for turning
+  // this into an actual country.
+  countryCode?: string;
   createdAt: string;
   is_blocked: boolean;
 };
