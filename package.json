@@ -19,7 +19,8 @@
     "test:alerts": "tsx --test src/alerts/*.test.ts",
     "test:activity": "tsx --test src/activity/*.test.ts",
     "test:players": "tsx --test src/players/*.test.ts",
-    "test:crm": "tsx --test src/crm/*.test.ts"
+    "test:crm": "tsx --test src/crm/*.test.ts",
+    "test:goal-inference": "tsx --test src/goal-inference/*.test.ts"
   },
   "keywords": [],
   "author": "",
