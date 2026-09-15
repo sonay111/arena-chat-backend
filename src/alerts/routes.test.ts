@@ -34,6 +34,17 @@ const countryUnknownWdUserId = "TEST_ROUTE_USER_COUNTRY_UNKNOWN";
 const countryKnownRefreshPlayerId = "TEST_ROUTE_REFRESH_PLAYER_COUNTRY_KNOWN";
 const countryUnknownRefreshPlayerId = "TEST_ROUTE_REFRESH_PLAYER_COUNTRY_UNKNOWN";
 
+// Resolved-visibility-window fixtures. These insert a raw_webhook_events row
+// directly (rather than going through a real webhook route) purely to give
+// the endpoint's LATERAL join something to find `last_event_at` from —
+// same rationale as the country-filter fixtures above.
+const stillPendingPaymentId = "test_route_wd_still_pending";
+const stillPendingUserId = "TEST_ROUTE_USER_STILL_PENDING";
+const justResolvedPaymentId = "test_route_wd_just_resolved";
+const justResolvedUserId = "TEST_ROUTE_USER_JUST_RESOLVED";
+const longResolvedPaymentId = "test_route_wd_long_resolved";
+const longResolvedUserId = "TEST_ROUTE_USER_LONG_RESOLVED";
+
 before(async () => {
   const app = express();
   app.use(alertsRouter);
@@ -108,6 +119,47 @@ before(async () => {
   );
   await pool.query("INSERT INTO players (id, country) VALUES ($1, 'ZZ')", [countryKnownRefreshPlayerId]);
   // countryUnknownRefreshPlayerId deliberately gets no players row at all.
+
+  // Resolved-visibility-window fixtures.
+  await pool.query(
+    `INSERT INTO payments (id, user_id, payment_type, status, amount, currency, created_at, updated_at)
+     VALUES ($1, $2, 'withdrawal', 'pending', 100, 'INR', now() - interval '15 minutes', now())`,
+    [stillPendingPaymentId, stillPendingUserId]
+  );
+  await pool.query(
+    `INSERT INTO withdrawal_delay_alerts (payment_id, player_context) VALUES ($1, $2)`,
+    [stillPendingPaymentId, JSON.stringify({ identity: { _id: stillPendingUserId, username: "still_pending_user" } })]
+  );
+
+  await pool.query(
+    `INSERT INTO payments (id, user_id, payment_type, status, amount, currency, created_at, updated_at)
+     VALUES ($1, $2, 'withdrawal', 'rejected', 100, 'INR', now() - interval '15 minutes', now())`,
+    [justResolvedPaymentId, justResolvedUserId]
+  );
+  await pool.query(
+    `INSERT INTO withdrawal_delay_alerts (payment_id, player_context) VALUES ($1, $2)`,
+    [justResolvedPaymentId, JSON.stringify({ identity: { _id: justResolvedUserId, username: "just_resolved_user" } })]
+  );
+  await pool.query(
+    `INSERT INTO raw_webhook_events (route, event_name, user_id, event_id, payload, received_at)
+     VALUES ('/withdrawals', 'withdrawal.rejected', $1, 'test_route_wd_just_resolved_evt', $2, now() - interval '5 minutes')`,
+    [justResolvedUserId, JSON.stringify({ event: "withdrawal.rejected", data: { _id: justResolvedPaymentId, userId: justResolvedUserId, status: "rejected" } })]
+  );
+
+  await pool.query(
+    `INSERT INTO payments (id, user_id, payment_type, status, amount, currency, created_at, updated_at)
+     VALUES ($1, $2, 'withdrawal', 'completed', 100, 'INR', now() - interval '3 hours', now())`,
+    [longResolvedPaymentId, longResolvedUserId]
+  );
+  await pool.query(
+    `INSERT INTO withdrawal_delay_alerts (payment_id, player_context) VALUES ($1, $2)`,
+    [longResolvedPaymentId, JSON.stringify({ identity: { _id: longResolvedUserId, username: "long_resolved_user" } })]
+  );
+  await pool.query(
+    `INSERT INTO raw_webhook_events (route, event_name, user_id, event_id, payload, received_at)
+     VALUES ('/withdrawals', 'withdrawal.completed', $1, 'test_route_wd_long_resolved_evt', $2, now() - interval '2 hours')`,
+    [longResolvedUserId, JSON.stringify({ event: "withdrawal.completed", data: { _id: longResolvedPaymentId, userId: longResolvedUserId, status: "completed" } })]
+  );
 });
 
 after(async () => {
@@ -122,6 +174,14 @@ after(async () => {
     [countryKnownRefreshPlayerId, countryUnknownRefreshPlayerId],
   ]);
   await pool.query("DELETE FROM players WHERE id = ANY($1)", [[countryKnownWdUserId, countryKnownRefreshPlayerId]]);
+
+  const resolvedWindowPaymentIds = [stillPendingPaymentId, justResolvedPaymentId, longResolvedPaymentId];
+  await pool.query("DELETE FROM withdrawal_delay_alerts WHERE payment_id = ANY($1)", [resolvedWindowPaymentIds]);
+  await pool.query("DELETE FROM payments WHERE id = ANY($1)", [resolvedWindowPaymentIds]);
+  await pool.query("DELETE FROM raw_webhook_events WHERE event_id = ANY($1)", [
+    ["test_route_wd_just_resolved_evt", "test_route_wd_long_resolved_evt"],
+  ]);
+
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   await pool.end();
 });
@@ -138,6 +198,54 @@ test("GET /alerts/withdrawal-delays returns combined withdrawal + player data", 
   assert.equal(alert.status, "progress");
   assert.equal(alert.player.identity._id, userId);
   assert.equal(alert.player.identity.username, "route_test_user");
+});
+
+test("GET /alerts/withdrawal-delays: a still-pending withdrawal appears", async () => {
+  const res = await fetch(`${baseUrl}/alerts/withdrawal-delays`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  const alert = body.alerts.find((a: any) => a.paymentId === stillPendingPaymentId);
+  assert.ok(alert, "expected the still-pending withdrawal to appear");
+  assert.equal(alert.status, "pending");
+});
+
+test("GET /alerts/withdrawal-delays: a withdrawal resolved 5 minutes ago still appears, with its new status", async () => {
+  const res = await fetch(`${baseUrl}/alerts/withdrawal-delays`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  const alert = body.alerts.find((a: any) => a.paymentId === justResolvedPaymentId);
+  assert.ok(alert, "expected the just-resolved withdrawal to still appear within the 1-hour window");
+  assert.equal(alert.status, "rejected");
+});
+
+test("GET /alerts/withdrawal-delays: statusChangedAt reflects when the resolving event arrived, not createdAt", async () => {
+  const res = await fetch(`${baseUrl}/alerts/withdrawal-delays`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  const alert = body.alerts.find((a: any) => a.paymentId === justResolvedPaymentId);
+  assert.ok(alert, "expected the just-resolved withdrawal to appear");
+  assert.ok(alert.statusChangedAt, "expected statusChangedAt to be present");
+
+  // Fixture's raw_webhook_events row was inserted at now() - 5 minutes;
+  // createdAt (the payment itself) was inserted at now() - 15 minutes.
+  const statusChangedAgeMinutes = (Date.now() - new Date(alert.statusChangedAt).getTime()) / 60_000;
+  assert.ok(
+    statusChangedAgeMinutes >= 3 && statusChangedAgeMinutes <= 10,
+    `expected statusChangedAt ~5 minutes ago, got ${statusChangedAgeMinutes.toFixed(1)} minutes ago`
+  );
+  assert.notEqual(alert.statusChangedAt, alert.createdAt);
+});
+
+test("GET /alerts/withdrawal-delays: a withdrawal resolved 2 hours ago is excluded", async () => {
+  const res = await fetch(`${baseUrl}/alerts/withdrawal-delays`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  const alert = body.alerts.find((a: any) => a.paymentId === longResolvedPaymentId);
+  assert.equal(alert, undefined, "expected the long-resolved withdrawal to have dropped off");
 });
 
 test("GET /alerts/refresh-detections returns player id, refresh count, and timestamp, most recent first", async () => {

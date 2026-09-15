@@ -17,22 +17,51 @@ const COUNTRY_FILTER_SQL = `(
   OR ($1 != 'unknown' AND pl.country = $1)
 )`;
 
+// Terminal outcomes seen in real traffic (see docs/tech-crm-webhooks.pdf +
+// confirmed live 2026-09-11: rejected/failed/cancelled joined the original
+// pending/completed pair). Anything else (pending, or an unrecognized future
+// status) is treated as still-open and always shown — only a status in this
+// list is subject to the RESOLVED_VISIBILITY_MINUTES cutoff below.
+const RESOLVED_WITHDRAWAL_STATUSES = ["completed", "rejected", "failed", "cancelled"];
+
+// How long a resolved withdrawal stays visible after resolving, so the
+// frontend doesn't lose it off the list the instant it stops being pending.
+const RESOLVED_VISIBILITY_MINUTES = 60;
+
 // Reads persisted alerts (payments joined with their saved player_context
 // snapshot) rather than calling the CRM again — the enrichment already
 // happened once, at flag time, in withdrawal-delay-detector.ts.
+//
+// payments.updated_at can't tell us when a withdrawal resolved — real
+// traffic never populates data.updatedAt (confirmed: it's always null), so
+// that column is always null too. Instead, the LATERAL join below finds the
+// most recent raw_webhook_events row for this payment id — since payments
+// is upserted last-write-wins on every incoming event, that event's
+// received_at IS effectively "when this payment's current status was set."
 alertsRouter.get("/alerts/withdrawal-delays", async (req: Request, res: Response) => {
   const country = parseCountry(req.query.country);
 
   try {
     const { rows } = await pool.query(
       `SELECT p.id AS payment_id, p.user_id, p.amount, p.currency, p.status,
-              p.created_at, p.updated_at, a.player_context, a.flagged_at
+              p.created_at, p.updated_at, a.player_context, a.flagged_at,
+              le.last_event_at
        FROM withdrawal_delay_alerts a
        JOIN payments p ON p.id = a.payment_id
        LEFT JOIN players pl ON pl.id = p.user_id
+       LEFT JOIN LATERAL (
+         SELECT max(rwe.received_at) AS last_event_at
+         FROM raw_webhook_events rwe
+         WHERE rwe.route IN ('/withdrawals', '/withdrawals/status-update')
+           AND rwe.payload->'data'->>'_id' = p.id
+       ) le ON true
        WHERE ${COUNTRY_FILTER_SQL}
+         AND (
+           NOT (p.status = ANY($2::text[]))
+           OR le.last_event_at > now() - ($3 * INTERVAL '1 minute')
+         )
        ORDER BY a.flagged_at DESC`,
-      [country ?? null]
+      [country ?? null, RESOLVED_WITHDRAWAL_STATUSES, RESOLVED_VISIBILITY_MINUTES]
     );
 
     const alerts = rows.map((row) => ({
@@ -44,6 +73,11 @@ alertsRouter.get("/alerts/withdrawal-delays", async (req: Request, res: Response
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       flaggedAt: row.flagged_at,
+      // When this payment's status was last set — the same timestamp the
+      // RESOLVED_VISIBILITY_MINUTES cutoff above is computed from. Not the
+      // same as createdAt (when the withdrawal was first initiated) or
+      // updatedAt (always null — see comment above the route).
+      statusChangedAt: row.last_event_at,
       player: row.player_context,
     }));
 
