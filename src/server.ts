@@ -7,6 +7,7 @@ import { getUsers, CrmIpNotAllowedError } from "./crm/index.js";
 import { alertsRouter, startWithdrawalDelayCheck, refreshAlertsRouter } from "./alerts/index.js";
 import { activityRouter } from "./activity/index.js";
 import { playersRouter } from "./players/index.js";
+import { goalInferenceRouter } from "./goal-inference/index.js";
 
 // TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
 // Satyam's team yet, so every real CRM lookup below currently fails with
@@ -44,6 +45,7 @@ app.use(alertsRouter);
 app.use(refreshAlertsRouter);
 app.use(activityRouter);
 app.use(playersRouter);
+app.use(goalInferenceRouter);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later
