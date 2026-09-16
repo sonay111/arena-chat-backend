@@ -97,3 +97,13 @@ export function stopOddsFeed(): void {
   socket?.disconnect();
   socket = undefined;
 }
+
+// The most direct, always-available feed-health signal — feed_status
+// itself has never actually arrived in real traffic yet (0 occurrences in
+// every observation window so far), so a route relying on it alone would
+// have nothing to report even while genuinely disconnected. Socket
+// connection state is what GET /live-matches uses to tell "no live
+// matches right now" apart from "the feed is down" (see routes.ts).
+export function isOddsFeedConnected(): boolean {
+  return socket?.connected ?? false;
+}
