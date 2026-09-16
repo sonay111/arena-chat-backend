@@ -8,6 +8,7 @@ import { alertsRouter, startWithdrawalDelayCheck, refreshAlertsRouter } from "./
 import { activityRouter } from "./activity/index.js";
 import { playersRouter } from "./players/index.js";
 import { goalInferenceRouter } from "./goal-inference/index.js";
+import { startOddsFeed } from "./odds-feed/index.js";
 
 // TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
 // Satyam's team yet, so every real CRM lookup below currently fails with
@@ -155,4 +156,5 @@ io.on("connection", (socket) => {
 httpServer.listen(4000, () => {
   console.log("real-time server on :4000");
   startWithdrawalDelayCheck();
+  startOddsFeed();
 });
