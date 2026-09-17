@@ -161,6 +161,7 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     producerId: "1",
     producerStatus: "connected",
     activeBetCount: 0,
+    settledBetCount: { won: 0, lost: 0, void: 0 },
   });
 });
 
@@ -228,6 +229,41 @@ test("GET /live-matches: activeBetCount correctly excludes our real bet on sr:ma
     0,
     "bet _id 6aab7d62a41d15d89eb25bd5 settled (lost) at 2026-09-17T05:49:18Z and must no longer count as active"
   );
+});
+
+// Same real bet as the activeBetCount test above (_id 6aab7d62a41d15d89eb25bd5,
+// settled "lost" at 2026-09-17T05:49:18Z) -- confirms settledBetCount picks
+// it up correctly once it's no longer active.
+test("GET /live-matches: settledBetCount reflects our real settled (lost) bet on sr:match:73842246", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === realBetTestMatch.matchId);
+  assert.ok(match, "expected the real test match to appear");
+  assert.deepEqual(match.settledBetCount, { won: 0, lost: 1, void: 0 });
+});
+
+test("GET /live-matches/:matchId/bets: returns our real settled bet with all fields sourced correctly", async () => {
+  const res = await fetch(`${baseUrl}/live-matches/sr:match:73842246/bets`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  assert.equal(body.openBets.length, 0, "the bet has settled, it must not also appear as open");
+  const bet = body.settledBets.find((b: any) => b.betId === "6aab7d62a41d15d89eb25bd5");
+  assert.ok(bet, "expected our real settled bet to appear");
+  assert.equal(bet.playerId, "6a8e9b7f2ae5ea6dac1ce929");
+  assert.equal(bet.stake, 2);
+  assert.equal(bet.odds, 1.35, "odds should be backfilled from the original bet_placed event");
+  assert.equal(bet.marketName, "1st half - 1x2");
+  assert.equal(bet.status, "lost");
+  assert.equal(bet.timestamp, "2026-09-17T05:40:50.012Z");
+});
+
+test("GET /live-matches/:matchId/bets: a match with no real bets returns empty arrays, not an error", async () => {
+  const res = await fetch(`${baseUrl}/live-matches/sr:match:does-not-exist/bets`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body, { openBets: [], settledBets: [] });
 });
 
 test("GET /live-matches: producerStatus is 'disconnected' for a match tied to a producer that reported connection:false", async () => {

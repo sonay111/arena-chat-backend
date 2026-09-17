@@ -3,6 +3,9 @@ import type { Request, Response } from "express";
 import { matchStore, feedStatusStore, isOddsFeedConnected } from "./connection.js";
 import type { MatchState, FeedStatus } from "./state.js";
 import { getActiveBetCounts } from "./active-bets.js";
+import { getSettledBetCounts } from "./settled-bets.js";
+import type { SettledBetCounts } from "./settled-bets.js";
+import { getMatchBetHistory } from "./match-bet-history.js";
 import { lookupSportInfo } from "./sport-mapping.js";
 
 export const oddsFeedRouter = Router();
@@ -28,7 +31,12 @@ function getProducerStatus(producerId: string | undefined, producers: Map<string
   return "unconfirmed"; // feed_status seen, but its connection field wasn't a clear boolean
 }
 
-function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>, activeBetCounts: Map<string, number>) {
+function toResponseShape(
+  state: MatchState,
+  producers: Map<string, FeedStatus>,
+  activeBetCounts: Map<string, number>,
+  settledBetCounts: Map<string, SettledBetCounts>
+) {
   // sportId is kept exactly as-is (never removed/replaced). sportName/
   // sportColor are resolved on top of it, but null (not the string
   // "Unknown") for anything not yet in SPORT_MAPPING — a literal
@@ -56,6 +64,10 @@ function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>, 
     // bets — activeBetCounts.get() only has entries for matchIds that
     // actually appear in some real bet's legs[].
     activeBetCount: activeBetCounts.get(state.matchId) ?? 0,
+    // { won, lost, void } rather than one combined number — void/cashed_out
+    // outcomes get their own bucket rather than being forced into won/lost
+    // or silently dropped (see settled-bets.ts).
+    settledBetCount: settledBetCounts.get(state.matchId) ?? { won: 0, lost: 0, void: 0 },
   };
 }
 
@@ -63,13 +75,13 @@ oddsFeedRouter.get("/live-matches", async (req: Request, res: Response) => {
   const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
   const tournamentIdFilter = typeof req.query.tournamentId === "string" ? req.query.tournamentId : undefined;
 
-  const activeBetCounts = await getActiveBetCounts();
+  const [activeBetCounts, settledBetCounts] = await Promise.all([getActiveBetCounts(), getSettledBetCounts()]);
 
   const matches = [];
   for (const state of matchStore.values()) {
     if (statusFilter !== undefined && state.eventStatus !== statusFilter) continue;
     if (tournamentIdFilter !== undefined && state.tournamentId !== tournamentIdFilter) continue;
-    matches.push(toResponseShape(state, feedStatusStore, activeBetCounts));
+    matches.push(toResponseShape(state, feedStatusStore, activeBetCounts, settledBetCounts));
   }
 
   // connected: the concrete, always-available signal — real feed_status
@@ -85,4 +97,19 @@ oddsFeedRouter.get("/live-matches", async (req: Request, res: Response) => {
   };
 
   res.json({ matches, feedHealth });
+});
+
+// Not gated on the match currently being in matchStore — this is real
+// history, so a match that already ended (and dropped out of the live
+// state) is still a valid thing to ask about.
+oddsFeedRouter.get("/live-matches/:matchId/bets", async (req: Request<{ matchId: string }>, res: Response) => {
+  const { matchId } = req.params;
+
+  try {
+    const { openBets, settledBets } = await getMatchBetHistory(matchId);
+    res.json({ openBets, settledBets });
+  } catch (err) {
+    console.error(`GET /live-matches/${matchId}/bets failed:`, err);
+    res.status(500).json({ ok: false });
+  }
 });

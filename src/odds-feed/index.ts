@@ -1,5 +1,7 @@
 export * from "./state.js";
 export * from "./connection.js";
 export * from "./active-bets.js";
+export * from "./settled-bets.js";
+export * from "./match-bet-history.js";
 export * from "./sport-mapping.js";
 export * from "./routes.js";
