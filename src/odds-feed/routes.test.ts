@@ -51,6 +51,14 @@ const unknownProducerMatch: MatchState = {
   // match_status, never a real odds message.
 };
 
+const neverReportedProducerMatch: MatchState = {
+  matchId: "TEST_NEVER_REPORTED_1",
+  name: "Test G vs Test H",
+  sportId: "sr:sport:1",
+  eventStatus: "Live",
+  producerId: "4", // has a producerId, but "4" never appears in feedStatusStore below
+};
+
 before(async () => {
   const app = express();
   app.use(oddsFeedRouter);
@@ -65,6 +73,7 @@ before(async () => {
   matchStore.set(liveMatch.matchId, liveMatch);
   matchStore.set(notStartedMatch.matchId, notStartedMatch);
   matchStore.set(unknownProducerMatch.matchId, unknownProducerMatch);
+  matchStore.set(neverReportedProducerMatch.matchId, neverReportedProducerMatch);
   feedStatusStore.set("1", { raw: { producer_id: 1, connection: true }, receivedAt: 100 });
   feedStatusStore.set("2", { raw: { producer_id: 2, connection: false }, receivedAt: 200 });
 });
@@ -73,12 +82,13 @@ after(async () => {
   matchStore.delete(liveMatch.matchId);
   matchStore.delete(notStartedMatch.matchId);
   matchStore.delete(unknownProducerMatch.matchId);
+  matchStore.delete(neverReportedProducerMatch.matchId);
   feedStatusStore.delete("1");
   feedStatusStore.delete("2");
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 });
 
-test("GET /live-matches: returns matches in the documented shape (event_status, not eventStatus), producerConnected true for a connected producer", async () => {
+test("GET /live-matches: returns matches in the documented shape (event_status, not eventStatus), producerStatus 'connected' for a connected producer", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -96,28 +106,38 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     event_status: "Live",
     scheduledTime: "Wed Sep 16 09:30:00 UTC 2026",
     producerId: "1",
-    producerConnected: true,
+    producerStatus: "connected",
   });
 });
 
-test("GET /live-matches: producerConnected is false for a match tied to a disconnected producer", async () => {
+test("GET /live-matches: producerStatus is 'disconnected' for a match tied to a producer that reported connection:false", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
   const match = body.matches.find((m: any) => m.matchId === notStartedMatch.matchId);
   assert.ok(match);
   assert.equal(match.producerId, "2");
-  assert.equal(match.producerConnected, false);
+  assert.equal(match.producerStatus, "disconnected");
 });
 
-test("GET /live-matches: producerConnected is false when no producerId was ever captured for the match", async () => {
+test("GET /live-matches: producerStatus is 'unconfirmed' when no producerId was ever captured for the match", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
   const match = body.matches.find((m: any) => m.matchId === unknownProducerMatch.matchId);
   assert.ok(match);
   assert.equal(match.producerId, undefined);
-  assert.equal(match.producerConnected, false);
+  assert.equal(match.producerStatus, "unconfirmed");
+});
+
+test("GET /live-matches: producerStatus is 'unconfirmed' (not 'disconnected') when the producerId is known but feed_status has never arrived for it", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === neverReportedProducerMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.producerId, "4");
+  assert.equal(match.producerStatus, "unconfirmed", "never having received feed_status must read differently than a confirmed disconnect");
 });
 
 test("GET /live-matches?status=Live: only returns matches with that event_status", async () => {

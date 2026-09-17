@@ -9,18 +9,24 @@ export const oddsFeedRouter = Router();
 // (every other field mirrors the feed's camelCase) — this response is
 // meant to mirror the wire shape as closely as possible rather than
 // normalize it, since that's what was asked for.
-//
-// producerConnected defaults to false whenever we can't positively confirm
-// the producer is connected — no producerId captured yet (e.g. this match
-// has only ever come in via match_status/bet_stop, never odds), or no
-// feed_status ever seen for that producer, or its last known
-// `connection` value isn't literally true. This is a deliberate choice:
-// "unconfirmed" and "known disconnected" both read as "don't fully trust
-// this yet" rather than defaulting stale/unknown data to look trustworthy.
-function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>) {
-  const producerStatus = state.producerId !== undefined ? producers.get(state.producerId) : undefined;
-  const producerConnected = (producerStatus?.raw as any)?.connection === true;
+export type ProducerStatus = "connected" | "disconnected" | "unconfirmed";
 
+// Three distinct states, not a boolean — "we've never received feed_status
+// for this producer" and "we received it and it said disconnected" are
+// different situations for a frontend to show (e.g. "unconfirmed" vs.
+// "stale"), and collapsing them both into `false` (an earlier version of
+// this endpoint did exactly that) hides which one it actually is.
+function getProducerStatus(producerId: string | undefined, producers: Map<string, FeedStatus>): ProducerStatus {
+  if (producerId === undefined) return "unconfirmed"; // no producerId captured for this match at all
+  const status = producers.get(producerId);
+  if (!status) return "unconfirmed"; // no feed_status ever seen for this producer
+  const connection = (status.raw as any)?.connection;
+  if (connection === true) return "connected";
+  if (connection === false) return "disconnected";
+  return "unconfirmed"; // feed_status seen, but its connection field wasn't a clear boolean
+}
+
+function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>) {
   return {
     matchId: state.matchId,
     name: state.name,
@@ -32,7 +38,7 @@ function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>) 
     event_status: state.eventStatus,
     scheduledTime: state.scheduledTime,
     producerId: state.producerId,
-    producerConnected,
+    producerStatus: getProducerStatus(state.producerId, producers),
   };
 }
 
