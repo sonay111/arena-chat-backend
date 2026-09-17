@@ -83,6 +83,25 @@ const tableTennisMatch: MatchState = {
   eventStatus: "Live",
 };
 
+const cricketMatch: MatchState = {
+  matchId: "TEST_CRICKET_1",
+  name: "Test XI vs Test XI 2",
+  sportId: "sr:sport:21", // mapped -- see sport-mapping.ts
+  eventStatus: "Live",
+};
+
+// A sportId that will never realistically get mapped, so the
+// null/null-fallback test doesn't silently break the next time a real
+// sport gets confirmed and added to SPORT_MAPPING (sr:sport:5 and
+// sr:sport:1, used by other fixtures below, both became mapped after
+// this test file was first written).
+const unmappedSportMatch: MatchState = {
+  matchId: "TEST_UNMAPPED_SPORT_1",
+  name: "Test Unmapped A vs Test Unmapped B",
+  sportId: "sr:sport:999999",
+  eventStatus: "Live",
+};
+
 before(async () => {
   const app = express();
   app.use(oddsFeedRouter);
@@ -100,6 +119,8 @@ before(async () => {
   matchStore.set(neverReportedProducerMatch.matchId, neverReportedProducerMatch);
   matchStore.set(realBetTestMatch.matchId, realBetTestMatch);
   matchStore.set(tableTennisMatch.matchId, tableTennisMatch);
+  matchStore.set(cricketMatch.matchId, cricketMatch);
+  matchStore.set(unmappedSportMatch.matchId, unmappedSportMatch);
   feedStatusStore.set("1", { raw: { producer_id: 1, connection: true }, receivedAt: 100 });
   feedStatusStore.set("2", { raw: { producer_id: 2, connection: false }, receivedAt: 200 });
 });
@@ -111,6 +132,8 @@ after(async () => {
   matchStore.delete(neverReportedProducerMatch.matchId);
   matchStore.delete(realBetTestMatch.matchId);
   matchStore.delete(tableTennisMatch.matchId);
+  matchStore.delete(cricketMatch.matchId);
+  matchStore.delete(unmappedSportMatch.matchId);
   feedStatusStore.delete("1");
   feedStatusStore.delete("2");
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -127,8 +150,8 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     matchId: "TEST_LIVE_1",
     name: "Test A vs Test B",
     sportId: "sr:sport:5",
-    sportName: null,
-    sportColor: null,
+    sportName: "Tennis",
+    sportColor: "#EAB308",
     tournamentId: "sr:tournament:2472",
     tournamentName: "Test Open",
     categoryName: "Testland",
@@ -145,22 +168,36 @@ test("GET /live-matches: sportId is kept unchanged, sportName/sportColor are nul
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
-  const match = body.matches.find((m: any) => m.matchId === liveMatch.matchId);
+  const match = body.matches.find((m: any) => m.matchId === unmappedSportMatch.matchId);
   assert.ok(match);
-  assert.equal(match.sportId, "sr:sport:5", "sportId must never be removed or replaced");
+  assert.equal(match.sportId, "sr:sport:999999", "sportId must never be removed or replaced");
   assert.equal(match.sportName, null);
   assert.equal(match.sportColor, null);
 });
 
-test("GET /live-matches: sportName/sportColor are populated for a mapped sport (sr:sport:20)", async () => {
+test("GET /live-matches: sportName/sportColor are populated for all four mapped sports", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
-  const match = body.matches.find((m: any) => m.matchId === tableTennisMatch.matchId);
-  assert.ok(match);
-  assert.equal(match.sportId, "sr:sport:20");
-  assert.equal(match.sportName, "Table Tennis");
-  assert.equal(match.sportColor, "#06B6D4");
+  const expectations: Array<[MatchState, string, string]> = [
+    [tableTennisMatch, "Table Tennis", "#06B6D4"],
+    [cricketMatch, "Cricket", "#22C55E"],
+    [liveMatch, "Tennis", "#EAB308"],
+    [notStartedMatch, "Football", "#F97316"],
+  ];
+
+  for (const [fixture, expectedName, expectedColor] of expectations) {
+    const match = body.matches.find((m: any) => m.matchId === fixture.matchId);
+    assert.ok(match, `expected ${fixture.matchId} to appear`);
+    assert.equal(match.sportId, fixture.sportId);
+    assert.equal(match.sportName, expectedName, `${fixture.matchId} (${fixture.sportId}) sportName`);
+    assert.equal(match.sportColor, expectedColor, `${fixture.matchId} (${fixture.sportId}) sportColor`);
+  }
+
+  // Same guarantee as sport-mapping.test.ts, but confirmed end-to-end
+  // through the actual response: no two mapped sports share a color.
+  const colors = expectations.map(([, , color]) => color);
+  assert.equal(colors.length, new Set(colors).size);
 });
 
 test("GET /live-matches: a match with zero real bets shows activeBetCount: 0, not null/undefined", async () => {

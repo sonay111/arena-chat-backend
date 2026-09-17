@@ -14,6 +14,12 @@ export const SPORT_MAPPING: Record<string, SportInfo> = {
   // our data under "Czech Liga Pro" / "Challenger Series" — individual
   // player-vs-player matches, never team names).
   "sr:sport:20": { name: "Table Tennis", color: "#06B6D4" },
+  // Confirmed 2026-09-17 directly against the real Arena365 site, each
+  // cross-checked against the site's own sport-filtered Live tab (same
+  // tournament/match names as what we see in our data).
+  "sr:sport:21": { name: "Cricket", color: "#22C55E" },
+  "sr:sport:5": { name: "Tennis", color: "#EAB308" },
+  "sr:sport:1": { name: "Football", color: "#F97316" },
 };
 
 const UNKNOWN_SPORT: SportInfo = { name: "Unknown", color: "#9CA3AF" };
