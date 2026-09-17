@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { matchStore, feedStatusStore, isOddsFeedConnected } from "./connection.js";
 import type { MatchState, FeedStatus } from "./state.js";
+import { getActiveBetCounts } from "./active-bets.js";
 
 export const oddsFeedRouter = Router();
 
@@ -26,7 +27,7 @@ function getProducerStatus(producerId: string | undefined, producers: Map<string
   return "unconfirmed"; // feed_status seen, but its connection field wasn't a clear boolean
 }
 
-function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>) {
+function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>, activeBetCounts: Map<string, number>) {
   return {
     matchId: state.matchId,
     name: state.name,
@@ -39,18 +40,24 @@ function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>) 
     scheduledTime: state.scheduledTime,
     producerId: state.producerId,
     producerStatus: getProducerStatus(state.producerId, producers),
+    // Explicitly 0, not undefined/null, for a match with no real active
+    // bets — activeBetCounts.get() only has entries for matchIds that
+    // actually appear in some real bet's legs[].
+    activeBetCount: activeBetCounts.get(state.matchId) ?? 0,
   };
 }
 
-oddsFeedRouter.get("/live-matches", (req: Request, res: Response) => {
+oddsFeedRouter.get("/live-matches", async (req: Request, res: Response) => {
   const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
   const tournamentIdFilter = typeof req.query.tournamentId === "string" ? req.query.tournamentId : undefined;
+
+  const activeBetCounts = await getActiveBetCounts();
 
   const matches = [];
   for (const state of matchStore.values()) {
     if (statusFilter !== undefined && state.eventStatus !== statusFilter) continue;
     if (tournamentIdFilter !== undefined && state.tournamentId !== tournamentIdFilter) continue;
-    matches.push(toResponseShape(state, feedStatusStore));
+    matches.push(toResponseShape(state, feedStatusStore, activeBetCounts));
   }
 
   // connected: the concrete, always-available signal — real feed_status

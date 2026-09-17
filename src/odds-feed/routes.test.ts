@@ -59,6 +59,23 @@ const neverReportedProducerMatch: MatchState = {
   producerId: "4", // has a producerId, but "4" never appears in feedStatusStore below
 };
 
+// The real match a real test bet was placed on live 2026-09-17 (bet _id
+// 6aab7d62a41d15d89eb25bd5, confirmed via raw_webhook_events). Used to
+// verify activeBetCount against real, already-persisted data rather than
+// a synthetic fixture — same "real captured data" convention as
+// src/crm/endpoints.test.ts. This bet has since settled (lost, at
+// 2026-09-17T05:49:18Z) — see the test below, which now checks the
+// settled-exclusion path rather than the "still open" one.
+const realBetTestMatch: MatchState = {
+  matchId: "sr:match:73842246",
+  name: "Uzbekistan vs. China PR",
+  sportId: "sr:sport:1",
+  tournamentId: "sr:tournament:26006",
+  tournamentName: "Asian Games, Women",
+  categoryName: "International",
+  eventStatus: "Live",
+};
+
 before(async () => {
   const app = express();
   app.use(oddsFeedRouter);
@@ -74,6 +91,7 @@ before(async () => {
   matchStore.set(notStartedMatch.matchId, notStartedMatch);
   matchStore.set(unknownProducerMatch.matchId, unknownProducerMatch);
   matchStore.set(neverReportedProducerMatch.matchId, neverReportedProducerMatch);
+  matchStore.set(realBetTestMatch.matchId, realBetTestMatch);
   feedStatusStore.set("1", { raw: { producer_id: 1, connection: true }, receivedAt: 100 });
   feedStatusStore.set("2", { raw: { producer_id: 2, connection: false }, receivedAt: 200 });
 });
@@ -83,6 +101,7 @@ after(async () => {
   matchStore.delete(notStartedMatch.matchId);
   matchStore.delete(unknownProducerMatch.matchId);
   matchStore.delete(neverReportedProducerMatch.matchId);
+  matchStore.delete(realBetTestMatch.matchId);
   feedStatusStore.delete("1");
   feedStatusStore.delete("2");
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -107,7 +126,38 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     scheduledTime: "Wed Sep 16 09:30:00 UTC 2026",
     producerId: "1",
     producerStatus: "connected",
+    activeBetCount: 0,
   });
+});
+
+test("GET /live-matches: a match with zero real bets shows activeBetCount: 0, not null/undefined", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === notStartedMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.activeBetCount, 0);
+  assert.equal(typeof match.activeBetCount, "number");
+});
+
+// This bet was genuinely open when placed (2026-09-17T05:40:50Z), but
+// settled ~8.5 minutes later (a real sportsbook.bet_settled arrived at
+// 2026-09-17T05:49:18Z, status "lost") while this endpoint was being
+// built. So real-world state has since moved past "active" -- this test
+// now demonstrates the settled-exclusion working correctly against real
+// data, not the "still open" case the bet started as.
+test("GET /live-matches: activeBetCount correctly excludes our real bet on sr:match:73842246 now that it has settled", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === realBetTestMatch.matchId);
+  assert.ok(match, "expected the real test match to appear");
+  assert.equal(
+    match.activeBetCount,
+    0,
+    "bet _id 6aab7d62a41d15d89eb25bd5 settled (lost) at 2026-09-17T05:49:18Z and must no longer count as active"
+  );
 });
 
 test("GET /live-matches: producerStatus is 'disconnected' for a match tied to a producer that reported connection:false", async () => {
