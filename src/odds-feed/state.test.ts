@@ -56,6 +56,50 @@ test("match_status: updates eventStatus on existing state, leaves other fields u
   assert.equal(result.state.eventStatus, "Suspended");
   assert.equal(result.state.name, "Some Match", "unrelated fields should be preserved");
   assert.equal(result.state.producerId, "1", "producerId should be preserved (match_status doesn't carry it)");
+  assert.deepEqual(result.statusTransition, { from: "Live", to: "Suspended" });
+});
+
+test("statusTransition: not set for a match's very first status (nothing to transition from)", () => {
+  const payload = oddsPayload({ id: "sr:match:brand-new" });
+  const result = applyMatchMessage(undefined, "sr:match:brand-new", "odds", payload);
+
+  assert.equal(result.applied, true);
+  assert.equal(result.statusTransition, undefined);
+});
+
+test("statusTransition: not set when the new status is the same as the old one", () => {
+  const current: MatchState = { matchId: "sr:match:1", eventStatus: "Live" };
+  const payload = { matchId: "sr:match:1", status: "Live", _seq: 1 };
+  const result = applyMatchMessage(current, "sr:match:1", "match_status", payload);
+
+  assert.equal(result.applied, true);
+  assert.equal(result.statusTransition, undefined);
+});
+
+test("statusTransition: not set for bet_stop, which never touches eventStatus", () => {
+  const current: MatchState = { matchId: "sr:match:1", eventStatus: "Live" };
+  const payload = { matchId: "sr:match:1", _seq: 1 };
+  const result = applyMatchMessage(current, "sr:match:1", "bet_stop", payload);
+
+  assert.equal(result.applied, true);
+  assert.equal(result.statusTransition, undefined);
+});
+
+test("statusTransition: is set for ended_match when it carries a status different from before", () => {
+  const current: MatchState = { matchId: "sr:match:1", eventStatus: "Live" };
+  const payload = { matchId: "sr:match:1", status: "Ended" };
+  const result = applyMatchMessage(current, "sr:match:1", "ended_match", payload);
+
+  assert.deepEqual(result.statusTransition, { from: "Live", to: "Ended" });
+});
+
+test("statusTransition: not set when a message is rejected as stale", () => {
+  const current: MatchState = { matchId: "sr:match:1", eventStatus: "Live", lastTimestamp: 2000 };
+  const payload = oddsPayload({ id: "sr:match:1", event_status: "Suspended", timestamp: 1000 });
+  const result = applyMatchMessage(current, "sr:match:1", "odds", payload);
+
+  assert.equal(result.applied, false);
+  assert.equal(result.statusTransition, undefined);
 });
 
 test("bet_stop: marks bettingStopped without touching eventStatus", () => {

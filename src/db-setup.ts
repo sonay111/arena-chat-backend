@@ -261,6 +261,23 @@ CREATE TABLE IF NOT EXISTS bonuses (
   received_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_bonuses_user ON bonuses (user_id);
+
+-- ===== Odds feed status-transition log (src/odds-feed/) =====
+-- Deliberately NOT a full raw-message log like raw_webhook_events -- at
+-- roughly 185k odds messages/day, logging every one would be far too much
+-- volume for what this needs to answer. Only the transition itself
+-- (old status -> new status) is recorded, whenever a match's event_status
+-- actually changes (src/odds-feed/state.ts's applyMatchMessage detects
+-- this) -- never the full odds/markets payload, and never a row for a
+-- match's very first status (nothing to transition from yet).
+CREATE TABLE IF NOT EXISTS odds_status_transitions (
+  id          BIGSERIAL PRIMARY KEY,
+  match_id    TEXT NOT NULL,
+  from_status TEXT NOT NULL,
+  to_status   TEXT NOT NULL,
+  changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_odds_status_transitions_match ON odds_status_transitions (match_id);
 `;
 
 async function main() {

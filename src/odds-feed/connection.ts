@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 import type { Socket } from "socket.io-client";
 import { applyMatchMessage, applyFeedStatus, getMatchId, getProducerKey } from "./state.js";
 import type { MatchState, FeedStatus, OddsFeedEventName } from "./state.js";
+import { recordStatusTransition } from "./status-transitions.js";
 
 // In-memory current state per match — NOT a message log. Each key is
 // replaced wholesale on every applied update, never appended to, so this
@@ -66,6 +67,13 @@ export function startOddsFeed(): Socket {
       const result = applyMatchMessage(matchStore.get(matchId), matchId, eventName, payload);
       if (result.applied) {
         matchStore.set(matchId, result.state);
+
+        if (result.statusTransition) {
+          const { from, to } = result.statusTransition;
+          recordStatusTransition(matchId, from, to).catch((err) => {
+            console.error(`odds-feed: failed to record status transition for ${matchId} (${from} -> ${to}):`, err);
+          });
+        }
       }
     });
   }

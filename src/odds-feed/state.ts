@@ -29,9 +29,21 @@ export type MatchState = {
 
 export type OddsFeedEventName = "odds" | "match_status" | "bet_stop" | "ended_match";
 
+export type StatusTransition = {
+  from: string;
+  to: string;
+};
+
 export type ApplyResult = {
   applied: boolean;
   state: MatchState;
+  // Only set when this message actually changed eventStatus from one real
+  // value to a different one — not on a match's very first status (no
+  // prior value to transition from) and not when the "new" status is the
+  // same as what it already was. Lets the caller log just the transition
+  // itself (see connection.ts + odds_status_transitions) without this
+  // pure function needing to know anything about logging/DB.
+  statusTransition?: StatusTransition;
 };
 
 // odds payloads carry their own doc id at `id` (the payload IS the match
@@ -107,7 +119,12 @@ export function applyMatchMessage(
     next.lastTimestamp = incomingTimestamp;
   }
 
-  return { applied: true, state: next };
+  const statusTransition: StatusTransition | undefined =
+    base.eventStatus !== undefined && next.eventStatus !== undefined && base.eventStatus !== next.eventStatus
+      ? { from: base.eventStatus, to: next.eventStatus }
+      : undefined;
+
+  return { applied: true, state: next, statusTransition };
 }
 
 // feed_status is per-producer overall feed health, not per-match — tracked
