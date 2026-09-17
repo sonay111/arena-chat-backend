@@ -22,3 +22,15 @@ export function getSportInfo(sportId: string | undefined): SportInfo {
   if (sportId === undefined) return UNKNOWN_SPORT;
   return SPORT_MAPPING[sportId] ?? UNKNOWN_SPORT;
 }
+
+// Distinct from getSportInfo — returns undefined for an unmapped sportId
+// rather than the "Unknown" placeholder. GET /live-matches uses this: a
+// literal "Unknown" string would look the same for every unmapped sport,
+// hiding which specific one it actually is — the exact gap that made
+// identifying sr:sport:20 slower than it needed to be. Callers that want
+// this instead should keep the raw sportId visible (already in the
+// response) so a not-yet-mapped sport stays identifiable.
+export function lookupSportInfo(sportId: string | undefined): SportInfo | undefined {
+  if (sportId === undefined) return undefined;
+  return SPORT_MAPPING[sportId];
+}

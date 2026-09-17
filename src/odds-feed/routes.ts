@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { matchStore, feedStatusStore, isOddsFeedConnected } from "./connection.js";
 import type { MatchState, FeedStatus } from "./state.js";
 import { getActiveBetCounts } from "./active-bets.js";
+import { lookupSportInfo } from "./sport-mapping.js";
 
 export const oddsFeedRouter = Router();
 
@@ -28,10 +29,21 @@ function getProducerStatus(producerId: string | undefined, producers: Map<string
 }
 
 function toResponseShape(state: MatchState, producers: Map<string, FeedStatus>, activeBetCounts: Map<string, number>) {
+  // sportId is kept exactly as-is (never removed/replaced). sportName/
+  // sportColor are resolved on top of it, but null (not the string
+  // "Unknown") for anything not yet in SPORT_MAPPING — a literal
+  // "Unknown" would look identical for every unmapped sport, hiding which
+  // one it actually is. The raw sportId is what lets the frontend still
+  // show a distinguishable badge for it, same as before sr:sport:20 was
+  // identified.
+  const sportInfo = lookupSportInfo(state.sportId);
+
   return {
     matchId: state.matchId,
     name: state.name,
     sportId: state.sportId,
+    sportName: sportInfo?.name ?? null,
+    sportColor: sportInfo?.color ?? null,
     tournamentId: state.tournamentId,
     tournamentName: state.tournamentName,
     categoryName: state.categoryName,

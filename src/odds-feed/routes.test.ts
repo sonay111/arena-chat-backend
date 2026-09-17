@@ -76,6 +76,13 @@ const realBetTestMatch: MatchState = {
   eventStatus: "Live",
 };
 
+const tableTennisMatch: MatchState = {
+  matchId: "TEST_TABLE_TENNIS_1",
+  name: "Test Player vs Test Player 2",
+  sportId: "sr:sport:20", // mapped -- see sport-mapping.ts
+  eventStatus: "Live",
+};
+
 before(async () => {
   const app = express();
   app.use(oddsFeedRouter);
@@ -92,6 +99,7 @@ before(async () => {
   matchStore.set(unknownProducerMatch.matchId, unknownProducerMatch);
   matchStore.set(neverReportedProducerMatch.matchId, neverReportedProducerMatch);
   matchStore.set(realBetTestMatch.matchId, realBetTestMatch);
+  matchStore.set(tableTennisMatch.matchId, tableTennisMatch);
   feedStatusStore.set("1", { raw: { producer_id: 1, connection: true }, receivedAt: 100 });
   feedStatusStore.set("2", { raw: { producer_id: 2, connection: false }, receivedAt: 200 });
 });
@@ -102,6 +110,7 @@ after(async () => {
   matchStore.delete(unknownProducerMatch.matchId);
   matchStore.delete(neverReportedProducerMatch.matchId);
   matchStore.delete(realBetTestMatch.matchId);
+  matchStore.delete(tableTennisMatch.matchId);
   feedStatusStore.delete("1");
   feedStatusStore.delete("2");
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -118,6 +127,8 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     matchId: "TEST_LIVE_1",
     name: "Test A vs Test B",
     sportId: "sr:sport:5",
+    sportName: null,
+    sportColor: null,
     tournamentId: "sr:tournament:2472",
     tournamentName: "Test Open",
     categoryName: "Testland",
@@ -128,6 +139,28 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     producerStatus: "connected",
     activeBetCount: 0,
   });
+});
+
+test("GET /live-matches: sportId is kept unchanged, sportName/sportColor are null for an unmapped sport", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === liveMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.sportId, "sr:sport:5", "sportId must never be removed or replaced");
+  assert.equal(match.sportName, null);
+  assert.equal(match.sportColor, null);
+});
+
+test("GET /live-matches: sportName/sportColor are populated for a mapped sport (sr:sport:20)", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === tableTennisMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.sportId, "sr:sport:20");
+  assert.equal(match.sportName, "Table Tennis");
+  assert.equal(match.sportColor, "#06B6D4");
 });
 
 test("GET /live-matches: a match with zero real bets shows activeBetCount: 0, not null/undefined", async () => {
