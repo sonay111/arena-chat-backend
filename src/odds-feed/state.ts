@@ -14,6 +14,13 @@ export type MatchState = {
   scheduledTime?: string;
   bettingStopped?: boolean;
   ended?: boolean;
+  // Which upstream producer this match's odds come from — cross-referenced
+  // against feedStatusStore (see routes.ts) to tell whether this specific
+  // match's data is currently trustworthy or potentially stale. Only ever
+  // set from `odds` messages (the only event type that carries it in real
+  // traffic); match_status/bet_stop/ended_match leave it as whatever it
+  // already was.
+  producerId?: string;
   // The domain `timestamp` (epoch ms) of the last message actually applied
   // for this match, if that message carried one. This — not _seq or
   // arrival order — is what the ordering rule below guards with.
@@ -82,6 +89,7 @@ export function applyMatchMessage(
         countryCode: payload.countryCode ?? base.countryCode,
         eventStatus: payload.event_status ?? base.eventStatus,
         scheduledTime: payload.scheduledTime ?? base.scheduledTime,
+        producerId: payload.producer_id !== undefined ? String(payload.producer_id) : base.producerId,
       };
       break;
     case "match_status":
@@ -103,9 +111,10 @@ export function applyMatchMessage(
 }
 
 // feed_status is per-producer overall feed health, not per-match — tracked
-// separately from MatchState entirely. Shape hasn't been observed live yet
-// (0 occurrences in a 2-minute sample), so this just preserves whatever
-// arrives, keyed by producer, rather than assuming specific fields.
+// separately from MatchState entirely. Confirmed live 2026-09-17:
+// { producer_id, connection: boolean }. Still preserves whatever arrives
+// verbatim, keyed by producer, rather than hardcoding just that shape, in
+// case other fields show up on other producers.
 export type FeedStatus = {
   raw: unknown;
   receivedAt: number;

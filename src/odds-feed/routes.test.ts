@@ -26,6 +26,7 @@ const liveMatch: MatchState = {
   eventStatus: "Live",
   scheduledTime: "Wed Sep 16 09:30:00 UTC 2026",
   lastTimestamp: 1000,
+  producerId: "1", // connected, per the feedStatusStore fixture below
 };
 
 const notStartedMatch: MatchState = {
@@ -38,6 +39,16 @@ const notStartedMatch: MatchState = {
   countryCode: "OTH",
   eventStatus: "NotStarted",
   scheduledTime: "Wed Sep 16 12:00:00 UTC 2026",
+  producerId: "2", // disconnected, per the feedStatusStore fixture below
+};
+
+const unknownProducerMatch: MatchState = {
+  matchId: "TEST_UNKNOWN_PRODUCER_1",
+  name: "Test E vs Test F",
+  sportId: "sr:sport:1",
+  eventStatus: "Live",
+  // deliberately no producerId at all -- e.g. only ever seen via
+  // match_status, never a real odds message.
 };
 
 before(async () => {
@@ -53,15 +64,21 @@ before(async () => {
 
   matchStore.set(liveMatch.matchId, liveMatch);
   matchStore.set(notStartedMatch.matchId, notStartedMatch);
+  matchStore.set(unknownProducerMatch.matchId, unknownProducerMatch);
+  feedStatusStore.set("1", { raw: { producer_id: 1, connection: true }, receivedAt: 100 });
+  feedStatusStore.set("2", { raw: { producer_id: 2, connection: false }, receivedAt: 200 });
 });
 
 after(async () => {
   matchStore.delete(liveMatch.matchId);
   matchStore.delete(notStartedMatch.matchId);
+  matchStore.delete(unknownProducerMatch.matchId);
+  feedStatusStore.delete("1");
+  feedStatusStore.delete("2");
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 });
 
-test("GET /live-matches: returns matches in the documented shape (event_status, not eventStatus)", async () => {
+test("GET /live-matches: returns matches in the documented shape (event_status, not eventStatus), producerConnected true for a connected producer", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -78,7 +95,29 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     countryCode: "TST",
     event_status: "Live",
     scheduledTime: "Wed Sep 16 09:30:00 UTC 2026",
+    producerId: "1",
+    producerConnected: true,
   });
+});
+
+test("GET /live-matches: producerConnected is false for a match tied to a disconnected producer", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === notStartedMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.producerId, "2");
+  assert.equal(match.producerConnected, false);
+});
+
+test("GET /live-matches: producerConnected is false when no producerId was ever captured for the match", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === unknownProducerMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.producerId, undefined);
+  assert.equal(match.producerConnected, false);
 });
 
 test("GET /live-matches?status=Live: only returns matches with that event_status", async () => {
@@ -116,16 +155,18 @@ test("GET /live-matches: feedHealth.connected is false when the feed was never s
   const body = await res.json();
 
   assert.equal(body.feedHealth.connected, false);
-  assert.deepEqual(body.feedHealth.producers, {});
 });
 
 test("GET /live-matches: feedHealth.producers reflects feedStatusStore contents", async () => {
-  feedStatusStore.set("1", { raw: { producer_id: 1, status: "up" }, receivedAt: 123 });
+  // "99" rather than "1"/"2" -- those are already used by the producerId
+  // fixtures seeded in before(), and clobbering them here would break
+  // whichever of those tests happens to run after this one.
+  feedStatusStore.set("99", { raw: { producer_id: 99, status: "up" }, receivedAt: 123 });
   try {
     const res = await fetch(`${baseUrl}/live-matches`);
     const body = await res.json();
-    assert.deepEqual(body.feedHealth.producers, { "1": { raw: { producer_id: 1, status: "up" }, receivedAt: 123 } });
+    assert.deepEqual(body.feedHealth.producers["99"], { raw: { producer_id: 99, status: "up" }, receivedAt: 123 });
   } finally {
-    feedStatusStore.delete("1");
+    feedStatusStore.delete("99");
   }
 });

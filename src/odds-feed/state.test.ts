@@ -17,6 +17,7 @@ const oddsPayload = (overrides: Record<string, unknown> = {}) => ({
   categoryName: "Czech Republic",
   countryCode: "CZE",
   timestamp: 1789558921419,
+  producer_id: 1,
   ...overrides,
 });
 
@@ -33,6 +34,7 @@ test("odds: creates new match state with metadata, discards markets/outcomes", (
   assert.equal(result.state.tournamentName, "Czech Liga Pro");
   assert.equal(result.state.categoryName, "Czech Republic");
   assert.equal(result.state.countryCode, "CZE");
+  assert.equal(result.state.producerId, "1");
   assert.equal(result.state.eventStatus, "Live");
   assert.equal(result.state.scheduledTime, "Wed Sep 16 09:30:00 UTC 2026");
   assert.equal(result.state.lastTimestamp, 1789558921419);
@@ -45,6 +47,7 @@ test("match_status: updates eventStatus on existing state, leaves other fields u
     name: "Some Match",
     eventStatus: "Live",
     lastTimestamp: 1000,
+    producerId: "1",
   };
   const payload = { matchId: "sr:match:69456610", status: "Suspended", _seq: 193054 };
   const result = applyMatchMessage(current, "sr:match:69456610", "match_status", payload);
@@ -52,6 +55,7 @@ test("match_status: updates eventStatus on existing state, leaves other fields u
   assert.equal(result.applied, true);
   assert.equal(result.state.eventStatus, "Suspended");
   assert.equal(result.state.name, "Some Match", "unrelated fields should be preserved");
+  assert.equal(result.state.producerId, "1", "producerId should be preserved (match_status doesn't carry it)");
 });
 
 test("bet_stop: marks bettingStopped without touching eventStatus", () => {
