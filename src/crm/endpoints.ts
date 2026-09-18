@@ -237,13 +237,13 @@ export async function getAllActiveBonuses(
   };
 }
 
+// The top-level `feed` object this used to carry is gone entirely as of
+// Satyam's 2026-09-18 update -- producer connection is now genuinely
+// per-match (CrmLiveMatch.producerId/connection), which is strictly more
+// information, not less.
 export type GetLiveMatchesResponse = {
   matches: CrmLiveMatch[];
   totalData: number;
-  // producerId -> connected. Confirmed live 2026-09-18: {"1":true,"3":true,
-  // "4":true,"5":true}. No per-match link to any of these -- it's a single
-  // global snapshot for the whole response, not indexable by match.
-  feed: Record<string, boolean>;
 };
 
 // No pagination params observed or documented for this endpoint (the one

@@ -83,46 +83,50 @@ test("parseGetUsersResponse handles multiple users, including one with no email"
   assert.deepEqual(result.pagination, { page: 1, totalPages: 1, totalRows: 2 });
 });
 
-// Exact shape confirmed live 2026-09-18 via a real GET /crm/live-matches
-// call. Deliberately kept as the FULL real response (all 10 matches, not
-// trimmed) since two real quirks only show up across the whole set: status
-// casing is inconsistent ("not_started" on the cricket matches vs
-// "NotStarted" on the tennis one), and `region` is null for one match.
+// Exact shape confirmed live 2026-09-18, AFTER Satyam's same-day update to
+// this endpoint. Superseded the shape below it (kept in git history) --
+// three real fields didn't exist before this update: sportId (the real
+// sr:sport:N code, no longer reverse-derived from sportName), producerId/
+// connection (genuinely per-match now -- the previous response's
+// top-level `feed` object is gone entirely, not present anywhere in this
+// shape), and hasOdds (false correlates with producerId/connection both
+// null, confirmed on one real example).
 const REAL_LIVE_MATCHES_RESPONSE = {
   status: true,
   message: "Live matches found",
   data: {
     matches: [
-      { matchId: "sr:match:74630144", status: "Live", sportName: "Soccer", team1Name: "Zhejiang Professional Srl", team2Name: "Wuhan Three Towns FC Srl", tournamentName: "China Super League SRL", region: "Simulated Reality League", startTime: "2026-09-18T05:00:00.000Z", updatedAt: "2026-09-18T05:02:09.438Z" },
-      { matchId: "sr:match:74791556", status: "Live", sportName: "Table Tennis", team1Name: "Svoboda, Jan", team2Name: "Stolfa, Jakub", tournamentName: "Czech Liga Pro", region: "Czech Republic", startTime: "2026-09-18T06:00:00.000Z", updatedAt: "2026-09-18T06:01:16.837Z" },
-      { matchId: "sr:match:74791846", status: "Live", sportName: "Table Tennis", team1Name: "Zika, Tadeas", team2Name: "Wawrosz, Pavel", tournamentName: "Czech Liga Pro", region: "Czech Republic", startTime: "2026-09-18T06:00:00.000Z", updatedAt: "2026-09-18T06:01:16.538Z" },
-      { matchId: "sr:match:74793146", status: "Live", sportName: "Table Tennis", team1Name: "Skacelik, Richard", team2Name: "Byrtus, Samuel", tournamentName: "Czech Liga Pro", region: "Czech Republic", startTime: "2026-09-18T06:00:00.000Z", updatedAt: "2026-09-18T06:01:17.010Z" },
-      { matchId: "sr:match:74291666", status: "not_started", sportName: "Cricket", team1Name: "India", team2Name: "Australia", tournamentName: "U19 ODI Series India vs Australia", region: "International Youth", startTime: "2026-09-18T03:30:00.000Z", updatedAt: "2026-09-17T19:31:44.070Z" },
-      { matchId: "sr:match:73455992", status: "Live", sportName: "Cricket", team1Name: "Western Australia", team2Name: "South Australia Redbacks", tournamentName: "One-Day Cup", region: "Australia", startTime: "2026-09-18T06:00:00.000Z", updatedAt: "2026-09-18T06:01:23.172Z" },
-      { matchId: "sr:match:74525010", status: "Suspended", sportName: "Cricket", team1Name: "Japan", team2Name: "India", tournamentName: "T20 Asian Games, Women", region: "International", startTime: "2026-09-18T05:00:00.000Z", updatedAt: "2026-09-18T06:17:49.764Z" },
-      { matchId: "sr:match:74621936", status: "not_started", sportName: "Cricket", team1Name: "Mumbai", team2Name: "Kerala", tournamentName: "List-A Oman Tri-Series", region: "International", startTime: "2026-09-18T05:30:00.000Z", updatedAt: "2026-09-17T19:31:44.070Z" },
-      { matchId: "sr:match:74805980", status: "NotStarted", sportName: "Tennis", team1Name: "Trismuwantara, Gunawan", team2Name: "Cretu, Cezar (2001)", tournamentName: "Davis Cup", region: null, startTime: "2026-09-18T05:30:00.000Z", updatedAt: "2026-09-18T05:29:12.464Z" },
-      { matchId: "sr:match:74791922", status: "Live", sportName: "Table Tennis", team1Name: "Vaclavik, Miroslav", team2Name: "Novotny, Ladislav", tournamentName: "Czech Liga Pro", region: "Czech Republic", startTime: "2026-09-18T06:00:00.000Z", updatedAt: "2026-09-18T06:01:12.345Z" },
+      { matchId: "sr:match:74720562", sportId: "sr:sport:1", status: "Interrupted", sportName: "Soccer", team1Name: "Enugu Rangers International FC", team2Name: "Nasarawa United", tournamentName: "Premier League", region: "Nigeria", startTime: "2026-09-17T15:00:00.000Z", updatedAt: "2026-09-18T07:02:51.888Z", producerId: 1, connection: true, hasOdds: true },
+      { matchId: "sr:match:74291666", sportId: "sr:sport:21", status: "not_started", sportName: "Cricket", team1Name: "India", team2Name: "Australia", tournamentName: "U19 ODI Series India vs Australia", region: "International Youth", startTime: "2026-09-18T03:30:00.000Z", updatedAt: "2026-09-17T19:31:44.070Z", producerId: 5, connection: true, hasOdds: true },
+      { matchId: "sr:match:74805980", sportId: "sr:sport:5", status: "Live", sportName: "Tennis", team1Name: "Trismuwantara, Gunawan", team2Name: "Cretu, Cezar (2001)", tournamentName: "Davis Cup", region: null, startTime: "2026-09-18T05:30:00.000Z", updatedAt: "2026-09-18T07:18:21.592Z", producerId: 1, connection: true, hasOdds: true },
+      { matchId: "sr:match:74805984", sportId: "sr:sport:5", status: "NotStarted", sportName: "Tennis", team1Name: "Ali Da Costa, Rafalentino", team2Name: "Papoe, Radu Mihai", tournamentName: "Davis Cup", region: null, startTime: "2026-09-18T06:40:00.000Z", updatedAt: "2026-09-17T22:44:43.453Z", producerId: null, connection: null, hasOdds: false },
+      { matchId: "sr:match:74630122", sportId: "sr:sport:1", status: "Live", sportName: "Soccer", team1Name: "Kasimpasa SRL", team2Name: "Konyaspor KIF SRL", tournamentName: "Turkey Super Lig SRL", region: "Simulated Reality League", startTime: "2026-09-18T07:00:00.000Z", updatedAt: "2026-09-18T07:01:46.035Z", producerId: 1, connection: true, hasOdds: true },
     ],
-    totalData: 10,
-    feed: { "1": true, "3": true, "4": true, "5": true },
+    totalData: 5,
   },
 };
 
-test("parseLiveMatchesResponse reads matches/totalData/feed from the real data envelope", () => {
+test("parseLiveMatchesResponse reads matches/totalData from the real data envelope (no more top-level feed)", () => {
   const result = parseLiveMatchesResponse(REAL_LIVE_MATCHES_RESPONSE);
-  assert.equal(result.matches.length, 10);
-  assert.equal(result.totalData, 10);
-  assert.deepEqual(result.feed, { "1": true, "3": true, "4": true, "5": true });
+  assert.equal(result.matches.length, 5);
+  assert.equal(result.totalData, 5);
+  assert.equal((result as any).feed, undefined, "the old top-level feed object no longer exists in this shape");
 });
 
-test("parseLiveMatchesResponse preserves each match's real fields, including a null region", () => {
+test("parseLiveMatchesResponse preserves each match's real fields, including a null region and null producerId/connection", () => {
   const result = parseLiveMatchesResponse(REAL_LIVE_MATCHES_RESPONSE);
-  const suspended = result.matches.find((m) => m.matchId === "sr:match:74525010");
-  assert.ok(suspended);
-  assert.equal(suspended.status, "Suspended");
-  assert.equal(suspended.team1Name, "Japan");
+
+  const interrupted = result.matches.find((m) => m.matchId === "sr:match:74720562");
+  assert.ok(interrupted);
+  assert.equal(interrupted.status, "Interrupted", "a real status value not yet in our canonical set");
+  assert.equal(interrupted.sportId, "sr:sport:1");
 
   const noRegion = result.matches.find((m) => m.matchId === "sr:match:74805980");
   assert.equal(noRegion?.region, null);
+
+  const noOdds = result.matches.find((m) => m.matchId === "sr:match:74805984");
+  assert.ok(noOdds);
+  assert.equal(noOdds.hasOdds, false);
+  assert.equal(noOdds.producerId, null);
+  assert.equal(noOdds.connection, null);
 });

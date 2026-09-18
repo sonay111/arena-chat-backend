@@ -7,12 +7,17 @@ import type { GetLiveMatchesResponse } from "../crm/index.js";
 import type { CrmLiveMatch } from "../crm/types.js";
 
 // Real HTTP request against the actual router, same convention as every
-// other *.routes.test.ts in this repo. As of 2026-09-18, GET /live-matches
-// sources from the CRM's /crm/live-matches instead of our own socket
-// listener, so fetchLiveMatches (createOddsFeedRouter's injectable param)
-// is stubbed here — same rationale as checkWithdrawalDelays/
-// createGoalInferenceRouter: no mocking library in this project, and real
-// CRM calls depend on our server's IP being allowlisted.
+// other *.routes.test.ts in this repo. GET /live-matches sources from the
+// CRM's /crm/live-matches, so fetchLiveMatches (createOddsFeedRouter's
+// injectable param) is stubbed here — same rationale as
+// checkWithdrawalDelays/createGoalInferenceRouter: no mocking library in
+// this project, and real CRM calls depend on our server's IP being
+// allowlisted.
+//
+// Fixture shape reflects Satyam's 2026-09-18 update to this endpoint:
+// sportId is now a real field (no more reverse-derivation from sportName),
+// producerId/connection are genuinely per-match (the old top-level `feed`
+// object is gone), and hasOdds is new.
 
 let baseUrl: string;
 let server: http.Server;
@@ -20,6 +25,7 @@ let server: http.Server;
 function match(overrides: Partial<CrmLiveMatch>): CrmLiveMatch {
   return {
     matchId: "sr:match:0",
+    sportId: "sr:sport:1",
     status: "Live",
     sportName: "Soccer",
     team1Name: "Team A",
@@ -28,60 +34,104 @@ function match(overrides: Partial<CrmLiveMatch>): CrmLiveMatch {
     region: "Testland",
     startTime: "2026-09-18T05:00:00.000Z",
     updatedAt: new Date().toISOString(),
+    producerId: 1,
+    connection: true,
+    hasOdds: true,
     ...overrides,
   };
 }
 
 const freshSoccerMatch = match({
   matchId: "TEST_FRESH_SOCCER",
-  sportName: "Soccer", // CRM's name for what our own SPORT_MAPPING calls "Football"
+  sportId: "sr:sport:1",
+  sportName: "Soccer",
   team1Name: "Zhejiang Professional Srl",
   team2Name: "Wuhan Three Towns FC Srl",
   tournamentName: "China Super League SRL",
   region: "Simulated Reality League",
   updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(), // 5 min ago -- fresh
+  producerId: 1,
+  connection: true,
 });
 
 const suspendedCricketMatch = match({
   matchId: "TEST_SUSPENDED_CRICKET",
+  sportId: "sr:sport:21",
   status: "Suspended",
   sportName: "Cricket",
   team1Name: "Japan",
   team2Name: "India",
   tournamentName: "T20 Asian Games, Women",
   region: "International",
+  producerId: 5,
+  connection: true,
 });
 
 const notStartedSnakeCase = match({
   matchId: "TEST_NOT_STARTED_SNAKE",
+  sportId: "sr:sport:21",
   status: "not_started", // real casing seen on cricket matches
   sportName: "Cricket",
   team1Name: "Mumbai",
   team2Name: "Kerala",
+  producerId: 5,
+  connection: true,
 });
 
 const notStartedPascalCase = match({
   matchId: "TEST_NOT_STARTED_PASCAL",
+  sportId: "sr:sport:5",
   status: "NotStarted", // real casing seen on a tennis match, same live call
   sportName: "Tennis",
   team1Name: "Player One",
   team2Name: "Player Two",
   region: null, // real example: Davis Cup match had region: null
+  producerId: 1,
+  connection: true,
+});
+
+// Real example: no producer link yet correlates with hasOdds: false
+// (confirmed live 2026-09-18 -- sr:match:74805984).
+const noOddsMatch = match({
+  matchId: "TEST_NO_ODDS",
+  sportId: "sr:sport:5",
+  status: "NotStarted",
+  sportName: "Tennis",
+  team1Name: "Player Three",
+  team2Name: "Player Four",
+  producerId: null,
+  connection: null,
+  hasOdds: false,
 });
 
 const staleLiveMatch = match({
   matchId: "TEST_STALE_LIVE",
+  sportId: "sr:sport:20",
   sportName: "Table Tennis",
   team1Name: "Stale A",
   team2Name: "Stale B",
   updatedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(), // 7h ago
+  producerId: 1,
+  connection: true,
 });
 
 const unmappedSportMatch = match({
   matchId: "TEST_UNMAPPED_SPORT",
+  sportId: "sr:sport:999",
   sportName: "Basketball", // not in our SPORT_MAPPING
   team1Name: "Hoops A",
   team2Name: "Hoops B",
+  producerId: 1,
+  connection: true,
+});
+
+const disconnectedProducerMatch = match({
+  matchId: "TEST_DISCONNECTED_PRODUCER",
+  sportId: "sr:sport:1",
+  team1Name: "Down A",
+  team2Name: "Down B",
+  producerId: 3,
+  connection: false,
 });
 
 // The real match a real test bet was placed on (bet _id
@@ -91,9 +141,12 @@ const unmappedSportMatch = match({
 // instead of our own listener.
 const realBetMatch = match({
   matchId: "sr:match:73842246",
+  sportId: "sr:sport:1",
   sportName: "Soccer",
   team1Name: "Uzbekistan",
   team2Name: "China PR",
+  producerId: 1,
+  connection: true,
 });
 
 const STUB_RESPONSE: GetLiveMatchesResponse = {
@@ -102,12 +155,13 @@ const STUB_RESPONSE: GetLiveMatchesResponse = {
     suspendedCricketMatch,
     notStartedSnakeCase,
     notStartedPascalCase,
+    noOddsMatch,
     staleLiveMatch,
     unmappedSportMatch,
+    disconnectedProducerMatch,
     realBetMatch,
   ],
-  totalData: 7,
-  feed: { "1": true, "3": true, "4": true, "5": true },
+  totalData: 9,
 };
 
 async function stubFetcher(): Promise<GetLiveMatchesResponse> {
@@ -130,7 +184,7 @@ after(async () => {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 });
 
-test("GET /live-matches: maps a CRM match into our unchanged response contract", async () => {
+test("GET /live-matches: maps a CRM match into our response contract, including the new per-match fields", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -138,7 +192,7 @@ test("GET /live-matches: maps a CRM match into our unchanged response contract",
   const m = body.matches.find((x: any) => x.matchId === "TEST_FRESH_SOCCER");
   assert.ok(m);
   assert.equal(m.name, "Zhejiang Professional Srl vs. Wuhan Three Towns FC Srl", "team1Name + team2Name combined");
-  assert.equal(m.sportId, "sr:sport:1", "Soccer must resolve to our sr:sport:1 (mapped as Football)");
+  assert.equal(m.sportId, "sr:sport:1", "sportId comes directly from the CRM now, not reverse-derived");
   assert.equal(m.sportName, "Soccer", "sportName passes through the CRM's own raw value");
   assert.equal(m.sportColor, "#F97316");
   assert.equal(m.tournamentId, null, "CRM has no tournamentId at all");
@@ -149,7 +203,10 @@ test("GET /live-matches: maps a CRM match into our unchanged response contract",
   assert.equal(m.event_status, "Live");
   assert.equal(m.scheduledTime, freshSoccerMatch.startTime);
   assert.equal(m.lastUpdatedAt, freshSoccerMatch.updatedAt);
+  assert.equal(m.producerStatus, "connected", "this match's own producerId=1/connection=true");
+  assert.equal(m.hasOdds, true);
   assert.equal(typeof m.activeBetCount, "number");
+  assert.equal(typeof m.totalActiveStake, "object");
   assert.deepEqual(Object.keys(m.settledBetCount).sort(), ["lost", "void", "won"]);
 });
 
@@ -189,49 +246,39 @@ test("GET /live-matches: isSimulated is false for a real (non-SRL) match, purely
   assert.equal(m.isSimulated, false);
 });
 
-test("GET /live-matches: an unmapped sport passes sportName through raw, with sportId/sportColor null", async () => {
+test("GET /live-matches: an unmapped sportId passes sportId/sportName through raw, sportColor null", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
   const m = body.matches.find((x: any) => x.matchId === "TEST_UNMAPPED_SPORT");
   assert.ok(m);
+  assert.equal(m.sportId, "sr:sport:999", "a real, unmapped sportId still passes through -- never hidden");
   assert.equal(m.sportName, "Basketball");
-  assert.equal(m.sportId, null);
   assert.equal(m.sportColor, null);
 });
 
-test("GET /live-matches: feed connection status is a single top-level field, not repeated per match", async () => {
+test("GET /live-matches: hasOdds: false matches are NOT excluded, just labeled -- same principle as isSimulated", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
-  assert.equal(body.feedStatus, "connected", "every producer in the stub feed reports true");
-  const m = body.matches.find((x: any) => x.matchId === "TEST_FRESH_SOCCER");
-  assert.equal(m.producerId, undefined, "producerId is a dead field now that feed status is top-level -- removed entirely");
-  assert.equal(m.producerStatus, undefined, "producerStatus must no longer appear per-match");
+  const m = body.matches.find((x: any) => x.matchId === "TEST_NO_ODDS");
+  assert.ok(m, "a hasOdds: false match must still appear in results");
+  assert.equal(m.hasOdds, false);
 });
 
-test("GET /live-matches: feedStatus is 'degraded' (not 'unconfirmed') on a real mixed feed result", async () => {
-  const app = express();
-  app.use(
-    createOddsFeedRouter(async () => ({
-      matches: [freshSoccerMatch],
-      totalData: 1,
-      feed: { "1": true, "3": false },
-    }))
-  );
-  const mixedServer = http.createServer(app);
-  await new Promise<void>((resolve) => mixedServer.listen(0, resolve));
-  const address = mixedServer.address();
-  if (typeof address !== "object" || address === null) throw new Error("failed to bind");
-  const mixedBaseUrl = `http://127.0.0.1:${address.port}`;
+test("GET /live-matches: producerStatus is genuinely per-match now -- different values across different matches in the same response", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
 
-  try {
-    const res = await fetch(`${mixedBaseUrl}/live-matches`);
-    const body = await res.json();
-    assert.equal(body.feedStatus, "degraded");
-  } finally {
-    await new Promise<void>((resolve, reject) => mixedServer.close((err) => (err ? reject(err) : resolve())));
-  }
+  const connected = body.matches.find((x: any) => x.matchId === "TEST_FRESH_SOCCER");
+  const disconnected = body.matches.find((x: any) => x.matchId === "TEST_DISCONNECTED_PRODUCER");
+  const unconfirmed = body.matches.find((x: any) => x.matchId === "TEST_NO_ODDS");
+
+  assert.equal(connected.producerStatus, "connected");
+  assert.equal(disconnected.producerStatus, "disconnected");
+  assert.equal(unconfirmed.producerStatus, "unconfirmed");
+
+  assert.equal(body.feedStatus, undefined, "the old top-level feedStatus field is gone");
 });
 
 test("GET /live-matches: activeBetCount/settledBetCount still join correctly on matchId against real DB data", async () => {
@@ -288,13 +335,11 @@ test("GET /live-matches?tournamentId=...: known limitation -- always excludes ev
   assert.equal(body.matches.length, 0);
 });
 
-test("GET /live-matches: feedHealth.connected reflects a successful CRM call, producers built from the CRM's feed object", async () => {
+test("GET /live-matches: feedHealth.connected reflects a successful CRM call, no more .producers sub-object", async () => {
   const res = await fetch(`${baseUrl}/live-matches`);
   const body = await res.json();
 
-  assert.equal(body.feedHealth.connected, true);
-  assert.deepEqual(Object.keys(body.feedHealth.producers).sort(), ["1", "3", "4", "5"]);
-  assert.equal(body.feedHealth.producers["1"].raw.connection, true);
+  assert.deepEqual(body.feedHealth, { connected: true });
 });
 
 test("GET /live-matches: a failed CRM call returns 500, not a partial/broken response", async () => {

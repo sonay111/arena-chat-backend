@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeMatchStatus, normalizeCrmMatch, computeFeedStatus } from "./crm-live-matches.js";
+import { normalizeMatchStatus, normalizeCrmMatch, computeProducerStatus } from "./crm-live-matches.js";
 import type { CrmLiveMatch } from "../crm/types.js";
 
 function match(overrides: Partial<CrmLiveMatch> = {}): CrmLiveMatch {
   return {
     matchId: "sr:match:1",
+    sportId: "sr:sport:1",
     status: "Live",
     sportName: "Soccer",
     team1Name: "Team A",
@@ -14,6 +15,9 @@ function match(overrides: Partial<CrmLiveMatch> = {}): CrmLiveMatch {
     region: "Testland",
     startTime: "2026-09-18T05:00:00.000Z",
     updatedAt: "2026-09-18T05:02:00.000Z",
+    producerId: 1,
+    connection: true,
+    hasOdds: true,
     ...overrides,
   };
 }
@@ -31,8 +35,8 @@ test("normalizeMatchStatus: 'Live' and 'Suspended' pass through as our canonical
   assert.equal(normalizeMatchStatus("Suspended"), "Suspended");
 });
 
-test("normalizeMatchStatus: an unrecognized value passes through as-is rather than being hidden", () => {
-  assert.equal(normalizeMatchStatus("Postponed"), "Postponed");
+test("normalizeMatchStatus: an unrecognized value passes through as-is rather than being hidden (e.g. real 'Interrupted' example)", () => {
+  assert.equal(normalizeMatchStatus("Interrupted"), "Interrupted");
 });
 
 test("normalizeCrmMatch: combines team1Name + team2Name into 'name'", () => {
@@ -40,22 +44,16 @@ test("normalizeCrmMatch: combines team1Name + team2Name into 'name'", () => {
   assert.equal(result.name, "Uzbekistan vs. China PR");
 });
 
-test("normalizeCrmMatch: 'Soccer' resolves to sr:sport:1 (our SPORT_MAPPING calls it Football)", () => {
-  const result = normalizeCrmMatch(match({ sportName: "Soccer" }));
+test("normalizeCrmMatch: uses the CRM's own sportId directly, no more reverse-derivation from sportName", () => {
+  const result = normalizeCrmMatch(match({ sportId: "sr:sport:1", sportName: "Soccer" }));
   assert.equal(result.sportId, "sr:sport:1");
   assert.equal(result.sportColor, "#F97316");
-  assert.equal(result.sportName, "Soccer", "sportName stays the CRM's own raw value");
+  assert.equal(result.sportName, "Soccer", "sportName still passes through the CRM's own raw value");
 });
 
-test("normalizeCrmMatch: 'Table Tennis', 'Cricket', 'Tennis' resolve directly (no synonym needed)", () => {
-  assert.equal(normalizeCrmMatch(match({ sportName: "Table Tennis" })).sportId, "sr:sport:20");
-  assert.equal(normalizeCrmMatch(match({ sportName: "Cricket" })).sportId, "sr:sport:21");
-  assert.equal(normalizeCrmMatch(match({ sportName: "Tennis" })).sportId, "sr:sport:5");
-});
-
-test("normalizeCrmMatch: an unmapped sport has sportId/sportColor null, sportName passes through raw", () => {
-  const result = normalizeCrmMatch(match({ sportName: "Basketball" }));
-  assert.equal(result.sportId, null);
+test("normalizeCrmMatch: an sportId we don't have a color mapping for gets sportColor null, sportId/sportName still pass through", () => {
+  const result = normalizeCrmMatch(match({ sportId: "sr:sport:999", sportName: "Basketball" }));
+  assert.equal(result.sportId, "sr:sport:999", "sportId always passes through now -- it's real data, not a guess");
   assert.equal(result.sportColor, null);
   assert.equal(result.sportName, "Basketball");
 });
@@ -95,19 +93,30 @@ test("normalizeCrmMatch: isSimulated is false when region is null", () => {
   assert.equal(result.isSimulated, false);
 });
 
-test("computeFeedStatus: 'connected' when every producer reports true", () => {
-  assert.equal(computeFeedStatus({ "1": true, "3": true }), "connected");
+test("normalizeCrmMatch: hasOdds passes through directly, including the real false case", () => {
+  assert.equal(normalizeCrmMatch(match({ hasOdds: true })).hasOdds, true);
+  assert.equal(normalizeCrmMatch(match({ hasOdds: false, producerId: null, connection: null })).hasOdds, false);
 });
 
-test("computeFeedStatus: 'disconnected' when every producer reports false", () => {
-  assert.equal(computeFeedStatus({ "1": false, "3": false }), "disconnected");
+test("normalizeCrmMatch: producerStatus is derived from this match's own producerId/connection", () => {
+  assert.equal(normalizeCrmMatch(match({ producerId: 1, connection: true })).producerStatus, "connected");
+  assert.equal(normalizeCrmMatch(match({ producerId: 1, connection: false })).producerStatus, "disconnected");
+  assert.equal(normalizeCrmMatch(match({ producerId: null, connection: null })).producerStatus, "unconfirmed");
 });
 
-test("computeFeedStatus: 'degraded' (not 'unconfirmed') on a real mixed result -- some producers up, some down", () => {
-  assert.equal(computeFeedStatus({ "1": true, "3": false }), "degraded");
+test("computeProducerStatus: 'connected' when connection is true", () => {
+  assert.equal(computeProducerStatus(1, true), "connected");
 });
 
-test("computeFeedStatus: 'unconfirmed' is reserved for genuinely no data -- feed missing or empty", () => {
-  assert.equal(computeFeedStatus(undefined), "unconfirmed");
-  assert.equal(computeFeedStatus({}), "unconfirmed");
+test("computeProducerStatus: 'disconnected' when connection is false", () => {
+  assert.equal(computeProducerStatus(1, false), "disconnected");
+});
+
+test("computeProducerStatus: 'unconfirmed' when producerId and connection are both null (real example: hasOdds: false matches)", () => {
+  assert.equal(computeProducerStatus(null, null), "unconfirmed");
+});
+
+test("computeProducerStatus: 'unconfirmed' on an inconsistent combination too (defensive, not observed live)", () => {
+  assert.equal(computeProducerStatus(null, true), "unconfirmed");
+  assert.equal(computeProducerStatus(1, null), "unconfirmed");
 });

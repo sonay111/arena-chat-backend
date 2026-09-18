@@ -6,11 +6,11 @@ import { SPORT_MAPPING } from "./sport-mapping.js";
 // "not_started" (snake_case) while a tennis match on the SAME call sent
 // "NotStarted" (PascalCase). Normalized here case- and
 // underscore-insensitively into our canonical four-value set. "Ended"
-// hasn't actually been observed from this endpoint yet (only Live/
-// Suspended/both NotStarted spellings, across one 10-match sample) —
-// included defensively since our own former data source did use it.
-// Anything totally unrecognized passes through as-is rather than being
-// hidden, so a genuinely new status value stays visible.
+// hasn't actually been observed from this endpoint yet — included
+// defensively since our own former data source did use it. Anything
+// totally unrecognized passes through as-is rather than being hidden
+// (e.g. "Interrupted", observed live 2026-09-18 and not yet in this set),
+// so a genuinely new status value stays visible.
 const CANONICAL_STATUSES: Record<string, string> = {
   live: "Live",
   suspended: "Suspended",
@@ -23,27 +23,24 @@ export function normalizeMatchStatus(raw: string): string {
   return CANONICAL_STATUSES[key] ?? raw;
 }
 
-// The CRM calls this sport "Soccer"; our own SPORT_MAPPING (built from the
-// raw odds feed, independently confirmed against the real site) calls the
-// same sport "Football". Both are accepted here so sr:sport:1's id/color
-// still resolve — without this, every Soccer match would silently show as
-// unmapped even though we do know this sport.
-const SPORT_NAME_SYNONYMS: Record<string, string> = {
-  soccer: "football",
-};
+export type ProducerStatus = "connected" | "disconnected" | "unconfirmed";
 
-function findSportIdByName(sportName: string): string | undefined {
-  const normalized = SPORT_NAME_SYNONYMS[sportName.toLowerCase()] ?? sportName.toLowerCase();
-  for (const [sportId, info] of Object.entries(SPORT_MAPPING)) {
-    if (info.name.toLowerCase() === normalized) return sportId;
-  }
-  return undefined;
+// Restored to genuine per-match logic now that the CRM sends real
+// producerId/connection per match (confirmed live 2026-09-18, replacing
+// the earlier response's top-level `feed` object, which no longer exists
+// at all). producerId and connection have always been observed together —
+// both null (no producer link yet, e.g. correlates with hasOdds: false)
+// or both populated — so null on either is treated as "unconfirmed" rather
+// than guessing.
+export function computeProducerStatus(producerId: number | null, connection: boolean | null): ProducerStatus {
+  if (producerId === null || connection === null) return "unconfirmed";
+  return connection ? "connected" : "disconnected";
 }
 
 export type NormalizedCrmMatch = {
   matchId: string;
   name: string;
-  sportId: string | null;
+  sportId: string;
   sportName: string;
   sportColor: string | null;
   // The CRM doesn't carry a per-match tournamentId or countryCode at all —
@@ -65,10 +62,13 @@ export type NormalizedCrmMatch = {
   // Explicit, dedicated flag so the frontend doesn't need to string-match
   // categoryName/region itself. SRL matches are real, legitimate, bettable
   // content — this is purely informational, not a filter; nothing in this
-  // backend excludes these matches (confirmed 2026-09-18: no such filter
-  // exists anywhere in this codebase — if the panel is hiding them, that's
-  // in the Lovable frontend, not here).
+  // backend excludes these matches.
   isSimulated: boolean;
+  producerStatus: ProducerStatus;
+  // Purely informational, same principle as isSimulated — a match with
+  // hasOdds: false is NOT excluded from results; the frontend can label it
+  // (e.g. "Markets Banned") instead of hiding it.
+  hasOdds: boolean;
 };
 
 // The one real literal value seen for a simulated match's region so far
@@ -82,8 +82,11 @@ export type NormalizedCrmMatch = {
 const SIMULATED_REALITY_LEAGUE_REGION = "Simulated Reality League";
 
 export function normalizeCrmMatch(match: CrmLiveMatch): NormalizedCrmMatch {
-  const sportId = findSportIdByName(match.sportName) ?? null;
-  const sportColor = sportId ? SPORT_MAPPING[sportId].color : null;
+  // sportId now comes directly from the CRM (confirmed live 2026-09-18) —
+  // no more reverse-deriving it from sportName, and no more Soccer/
+  // Football synonym workaround (that was only ever needed because we had
+  // to guess the code from the name).
+  const sportColor = SPORT_MAPPING[match.sportId]?.color ?? null;
 
   const parsedUpdatedAt = match.updatedAt ? new Date(match.updatedAt).getTime() : NaN;
   const lastUpdatedAtMs = Number.isNaN(parsedUpdatedAt) ? null : parsedUpdatedAt;
@@ -91,7 +94,7 @@ export function normalizeCrmMatch(match: CrmLiveMatch): NormalizedCrmMatch {
   return {
     matchId: match.matchId,
     name: `${match.team1Name} vs. ${match.team2Name}`,
-    sportId,
+    sportId: match.sportId,
     sportName: match.sportName,
     sportColor,
     tournamentId: null,
@@ -102,32 +105,7 @@ export function normalizeCrmMatch(match: CrmLiveMatch): NormalizedCrmMatch {
     scheduledTime: match.startTime ?? null,
     lastUpdatedAtMs,
     isSimulated: match.region === SIMULATED_REALITY_LEAGUE_REGION,
+    producerStatus: computeProducerStatus(match.producerId, match.connection),
+    hasOdds: match.hasOdds,
   };
-}
-
-// The CRM's `feed` object has no per-match producer link at all — unlike
-// our own former odds-feed state, which tracked a specific producerId per
-// match, this is one single global snapshot for the whole response, not
-// something that varies per match. That's why it's surfaced as a
-// top-level `feedStatus` field on the response (see routes.ts) instead of
-// being repeated identically on every match object.
-//
-// "connected" only when EVERY known producer reports true; "disconnected"
-// only when EVERY one reports false (safe to say nothing is up).
-// "degraded" is a MIXED result — some producers up, some down — which is
-// real, known information, not the same as "unconfirmed": "unconfirmed" is
-// reserved for genuinely having no data at all (the feed object is
-// missing or empty). We also have NOT yet confirmed this "feed" signal is
-// any more stable than our own former one, which flipped every producer
-// within 3 minutes in earlier testing — treat it as informative, not
-// authoritative.
-export type FeedConnectionStatus = "connected" | "degraded" | "disconnected" | "unconfirmed";
-
-export function computeFeedStatus(feed: Record<string, boolean> | undefined | null): FeedConnectionStatus {
-  if (!feed) return "unconfirmed";
-  const values = Object.values(feed);
-  if (values.length === 0) return "unconfirmed";
-  if (values.every((v) => v === true)) return "connected";
-  if (values.every((v) => v === false)) return "disconnected";
-  return "degraded";
 }

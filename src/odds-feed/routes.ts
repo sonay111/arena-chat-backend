@@ -6,7 +6,7 @@ import { getActiveBetCounts, getActiveStakeByCurrency } from "./active-bets.js";
 import type { StakeByCurrency } from "./active-bets.js";
 import { getSettledBetCounts } from "./settled-bets.js";
 import { getMatchBetHistory } from "./match-bet-history.js";
-import { normalizeCrmMatch, computeFeedStatus } from "./crm-live-matches.js";
+import { normalizeCrmMatch } from "./crm-live-matches.js";
 
 // Per the 2026-09-18 investigation: matches sitting in event_status Live
 // with no real update for 12-20+ hours were common and very likely
@@ -96,6 +96,15 @@ export function createOddsFeedRouter(
           // SRL matches; this just spares the frontend from string-matching
           // categoryName/region itself.
           isSimulated: normalized.isSimulated,
+          // Genuine per-match signal as of Satyam's 2026-09-18 update
+          // (the CRM's earlier response only had a single global `feed`
+          // object, not this) — see computeProducerStatus's comment.
+          producerStatus: normalized.producerStatus,
+          // Purely informational, not a filter — a hasOdds: false match
+          // still appears in results so the frontend can label it (e.g.
+          // "Markets Banned") instead of hiding it, same principle as
+          // isSimulated.
+          hasOdds: normalized.hasOdds,
           // Explicitly 0, not undefined/null, for a match with no real
           // active bets — activeBetCounts.get() only has entries for
           // matchIds that actually appear in some real bet's legs[].
@@ -118,26 +127,14 @@ export function createOddsFeedRouter(
       // connected here means "the CRM call itself succeeded" — a
       // different concept than before (previously our own socket's
       // connection state), but the same field name/meaning-at-a-glance:
-      // false means something is actually broken right now.
-      const feedHealth = {
-        connected: true,
-        producers: Object.fromEntries(
-          Object.entries(crmData.feed ?? {}).map(([producerId, connected]) => [
-            producerId,
-            { raw: { producer_id: Number(producerId), connection: connected }, receivedAt: now },
-          ])
-        ),
-      };
+      // false means something is actually broken right now. `.producers`
+      // is gone — that used to be built from the CRM's top-level `feed`
+      // object, which no longer exists at all as of the 2026-09-18 update;
+      // the real per-match `producerStatus` above replaces it with
+      // strictly more information (per match, not one global snapshot).
+      const feedHealth = { connected: true };
 
-      // A single top-level value, not repeated per match — this signal
-      // (from the CRM's `feed` object) is identical for every match in a
-      // given response, since there's no per-match producer link to derive
-      // it from individually. See computeFeedStatus's comment for what
-      // each value means, including why "degraded" (a real mixed result)
-      // is kept distinct from "unconfirmed" (genuinely no data).
-      const feedStatus = computeFeedStatus(crmData.feed);
-
-      res.json({ matches, feedHealth, feedStatus, staleExcludedCount });
+      res.json({ matches, feedHealth, staleExcludedCount });
     } catch (err) {
       console.error("GET /live-matches failed (CRM /crm/live-matches call):", err);
       res.status(500).json({ ok: false });

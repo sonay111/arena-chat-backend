@@ -75,16 +75,22 @@ export type BetSummary = {
   customerNGR: number;
 };
 
-// /crm/live-matches — confirmed live 2026-09-18. No matching doc exists
-// (checked every file in docs/); this shape is purely from a real captured
-// response. Two real quirks worth knowing before using this type: `status`
-// is inconsistently cased upstream ("Live"/"Suspended"/"NotStarted" AND
-// "not_started" all appeared across the same response — see
-// src/odds-feed/crm-live-matches.ts's normalizeMatchStatus), and there's no
-// per-match tournamentId, countryCode, or producerId at all, unlike our
-// former odds-feed-derived shape.
+// /crm/live-matches — reconfirmed live 2026-09-18 after Satyam updated it.
+// No matching doc exists (checked every file in docs/); this shape is
+// purely from real captured responses. `status` is still inconsistently
+// cased upstream ("Live"/"Suspended"/"NotStarted" AND "not_started" all
+// appeared across the same response — see
+// src/odds-feed/crm-live-matches.ts's normalizeMatchStatus). There's still
+// no per-match tournamentId or countryCode. This update added three real
+// fields that didn't exist before: `sportId` (the actual sr:sport:N code,
+// no longer something we have to reverse-derive from sportName),
+// `producerId`/`connection` (genuinely per-match now — the earlier
+// response's top-level `feed` object is gone entirely), and `hasOdds`
+// (false for a match with no producer link yet, confirmed to correlate
+// with producerId/connection both being null).
 export type CrmLiveMatch = {
   matchId: string;
+  sportId: string;
   status: string;
   sportName: string;
   team1Name: string;
@@ -93,4 +99,7 @@ export type CrmLiveMatch = {
   region: string | null;
   startTime: string;
   updatedAt: string;
+  producerId: number | null;
+  connection: boolean | null;
+  hasOdds: boolean;
 };
