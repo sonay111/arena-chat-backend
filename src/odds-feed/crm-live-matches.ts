@@ -62,7 +62,24 @@ export type NormalizedCrmMatch = {
   // null only if updatedAt was missing/unparseable, not a real case
   // observed yet.
   lastUpdatedAtMs: number | null;
+  // Explicit, dedicated flag so the frontend doesn't need to string-match
+  // categoryName/region itself. SRL matches are real, legitimate, bettable
+  // content — this is purely informational, not a filter; nothing in this
+  // backend excludes these matches (confirmed 2026-09-18: no such filter
+  // exists anywhere in this codebase — if the panel is hiding them, that's
+  // in the Lovable frontend, not here).
+  isSimulated: boolean;
 };
+
+// The one real literal value seen for a simulated match's region so far
+// (exact case, confirmed across every SRL example in real data: region is
+// always exactly "Simulated Reality League" when team/tournament names
+// carry "SRL", e.g. "Zhejiang Professional Srl" / "China Super League
+// SRL"). Matched on this exact region value, not a "contains SRL"
+// substring check against team/tournament text — safer if a non-simulated
+// match's name ever happens to contain those letters for an unrelated
+// reason.
+const SIMULATED_REALITY_LEAGUE_REGION = "Simulated Reality League";
 
 export function normalizeCrmMatch(match: CrmLiveMatch): NormalizedCrmMatch {
   const sportId = findSportIdByName(match.sportName) ?? null;
@@ -84,6 +101,7 @@ export function normalizeCrmMatch(match: CrmLiveMatch): NormalizedCrmMatch {
     eventStatus: normalizeMatchStatus(match.status),
     scheduledTime: match.startTime ?? null,
     lastUpdatedAtMs,
+    isSimulated: match.region === SIMULATED_REALITY_LEAGUE_REGION,
   };
 }
 

@@ -144,6 +144,7 @@ test("GET /live-matches: maps a CRM match into our unchanged response contract",
   assert.equal(m.tournamentId, null, "CRM has no tournamentId at all");
   assert.equal(m.tournamentName, "China Super League SRL");
   assert.equal(m.categoryName, "Simulated Reality League", "region mapped to categoryName");
+  assert.equal(m.isSimulated, true, "region is exactly 'Simulated Reality League'");
   assert.equal(m.countryCode, null, "CRM has no countryCode at all");
   assert.equal(m.event_status, "Live");
   assert.equal(m.scheduledTime, freshSoccerMatch.startTime);
@@ -177,6 +178,15 @@ test("GET /live-matches: region: null maps to categoryName: null", async () => {
 
   const m = body.matches.find((x: any) => x.matchId === "TEST_NOT_STARTED_PASCAL");
   assert.equal(m.categoryName, null);
+});
+
+test("GET /live-matches: isSimulated is false for a real (non-SRL) match, purely informational -- not excluded from results", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const m = body.matches.find((x: any) => x.matchId === "TEST_SUSPENDED_CRICKET");
+  assert.ok(m, "a non-SRL match must still appear in results");
+  assert.equal(m.isSimulated, false);
 });
 
 test("GET /live-matches: an unmapped sport passes sportName through raw, with sportId/sportColor null", async () => {

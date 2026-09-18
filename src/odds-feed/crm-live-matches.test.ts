@@ -76,6 +76,25 @@ test("normalizeCrmMatch: updatedAt is parsed to epoch ms for staleness compariso
   assert.equal(result.lastUpdatedAtMs, new Date("2026-09-18T05:02:00.000Z").getTime());
 });
 
+test("normalizeCrmMatch: isSimulated is true when region is exactly 'Simulated Reality League'", () => {
+  const result = normalizeCrmMatch(
+    match({ region: "Simulated Reality League", team1Name: "Zhejiang Professional Srl", team2Name: "Wuhan Three Towns FC Srl" })
+  );
+  assert.equal(result.isSimulated, true);
+});
+
+test("normalizeCrmMatch: isSimulated is false for a real region, even one with 'SRL' in team/tournament names", () => {
+  // Not a real observed combination, but confirms this is a region match,
+  // not a "contains SRL" text search against team/tournament names.
+  const result = normalizeCrmMatch(match({ region: "Czech Republic", team1Name: "Team SRL A", team2Name: "Team B" }));
+  assert.equal(result.isSimulated, false);
+});
+
+test("normalizeCrmMatch: isSimulated is false when region is null", () => {
+  const result = normalizeCrmMatch(match({ region: null }));
+  assert.equal(result.isSimulated, false);
+});
+
 test("computeFeedStatus: 'connected' when every producer reports true", () => {
   assert.equal(computeFeedStatus({ "1": true, "3": true }), "connected");
 });

@@ -90,6 +90,10 @@ export function createOddsFeedRouter(
           countryCode: normalized.countryCode,
           event_status: normalized.eventStatus,
           scheduledTime: normalized.scheduledTime,
+          // Purely informational -- not a filter. Nothing here excludes
+          // SRL matches; this just spares the frontend from string-matching
+          // categoryName/region itself.
+          isSimulated: normalized.isSimulated,
           // Explicitly 0, not undefined/null, for a match with no real
           // active bets — activeBetCounts.get() only has entries for
           // matchIds that actually appear in some real bet's legs[].
