@@ -15,6 +15,11 @@ import type { MatchState } from "./state.js";
 let baseUrl: string;
 let server: http.Server;
 
+// Fresh (a few minutes old) vs. stale (well past the 6-hour cutoff) —
+// used by the lastUpdatedAt/staleness-filter fixtures below.
+const FRESH_TIMESTAMP = Date.now() - 5 * 60_000;
+const STALE_TIMESTAMP = Date.now() - 7 * 60 * 60 * 1000;
+
 const liveMatch: MatchState = {
   matchId: "TEST_LIVE_1",
   name: "Test A vs Test B",
@@ -25,8 +30,19 @@ const liveMatch: MatchState = {
   countryCode: "TST",
   eventStatus: "Live",
   scheduledTime: "Wed Sep 16 09:30:00 UTC 2026",
-  lastTimestamp: 1000,
+  lastTimestamp: FRESH_TIMESTAMP,
   producerId: "1", // connected, per the feedStatusStore fixture below
+};
+
+// Per the 2026-09-18 investigation: a Live match whose lastUpdatedAt is
+// well past 6 hours old should be excluded by default when status=Live
+// is requested.
+const staleLiveMatch: MatchState = {
+  matchId: "TEST_STALE_LIVE_1",
+  name: "Test Stale A vs Test Stale B",
+  sportId: "sr:sport:1",
+  eventStatus: "Live",
+  lastTimestamp: STALE_TIMESTAMP,
 };
 
 const notStartedMatch: MatchState = {
@@ -121,6 +137,7 @@ before(async () => {
   matchStore.set(tableTennisMatch.matchId, tableTennisMatch);
   matchStore.set(cricketMatch.matchId, cricketMatch);
   matchStore.set(unmappedSportMatch.matchId, unmappedSportMatch);
+  matchStore.set(staleLiveMatch.matchId, staleLiveMatch);
   feedStatusStore.set("1", { raw: { producer_id: 1, connection: true }, receivedAt: 100 });
   feedStatusStore.set("2", { raw: { producer_id: 2, connection: false }, receivedAt: 200 });
 });
@@ -134,6 +151,7 @@ after(async () => {
   matchStore.delete(tableTennisMatch.matchId);
   matchStore.delete(cricketMatch.matchId);
   matchStore.delete(unmappedSportMatch.matchId);
+  matchStore.delete(staleLiveMatch.matchId);
   feedStatusStore.delete("1");
   feedStatusStore.delete("2");
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -162,6 +180,7 @@ test("GET /live-matches: returns matches in the documented shape (event_status, 
     producerStatus: "connected",
     activeBetCount: 0,
     settledBetCount: { won: 0, lost: 0, void: 0 },
+    lastUpdatedAt: new Date(FRESH_TIMESTAMP).toISOString(),
   });
 });
 
@@ -304,6 +323,54 @@ test("GET /live-matches?status=Live: only returns matches with that event_status
 
   assert.ok(matchIds.includes(liveMatch.matchId));
   assert.ok(!matchIds.includes(notStartedMatch.matchId));
+});
+
+test("GET /live-matches: lastUpdatedAt is null when no lastTimestamp has ever been set", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+
+  const match = body.matches.find((m: any) => m.matchId === unknownProducerMatch.matchId);
+  assert.ok(match);
+  assert.equal(match.lastUpdatedAt, null);
+});
+
+test("GET /live-matches?status=Live: excludes a match whose lastUpdatedAt is older than 6 hours by default", async () => {
+  const res = await fetch(`${baseUrl}/live-matches?status=Live`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(!matchIds.includes(staleLiveMatch.matchId), "a match stale for 7 hours must be excluded by default");
+  assert.ok(matchIds.includes(liveMatch.matchId), "a fresh (5-minutes-old) match must NOT be excluded");
+  assert.ok(body.staleExcludedCount >= 1, `expected staleExcludedCount to count our stale fixture, got ${body.staleExcludedCount}`);
+});
+
+test("GET /live-matches?status=Live&includeStale=true: bypasses the staleness filter", async () => {
+  const res = await fetch(`${baseUrl}/live-matches?status=Live&includeStale=true`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(matchIds.includes(staleLiveMatch.matchId), "includeStale=true must bring the stale match back");
+  assert.equal(body.staleExcludedCount, 0, "nothing should be reported as excluded once the filter is bypassed");
+});
+
+test("GET /live-matches (no status filter): the staleness filter does not apply, even to an old match", async () => {
+  const res = await fetch(`${baseUrl}/live-matches`);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(matchIds.includes(staleLiveMatch.matchId), "staleness filtering only triggers on an explicit status=Live request");
+  assert.equal(body.staleExcludedCount, 0);
+});
+
+test("GET /live-matches?status=NotStarted: the staleness filter does not apply to a non-Live status filter", async () => {
+  // notStartedMatch has no lastTimestamp at all, so this mainly confirms
+  // staleExcludedCount stays 0 -- the Live-only staleLiveMatch fixture
+  // wouldn't be included in this query's results anyway.
+  const res = await fetch(`${baseUrl}/live-matches?status=NotStarted`);
+  const body = await res.json();
+  assert.equal(body.staleExcludedCount, 0);
 });
 
 test("GET /live-matches?tournamentId=...: only returns matches in that tournament", async () => {

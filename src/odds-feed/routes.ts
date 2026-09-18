@@ -10,6 +10,24 @@ import { lookupSportInfo } from "./sport-mapping.js";
 
 export const oddsFeedRouter = Router();
 
+// Per the 2026-09-18 investigation: matches sitting in event_status Live
+// with no status change for 12-20+ hours were common and very likely
+// stuck/stale, not genuinely live. 6 hours is a deliberately generous cutoff
+// — comfortably longer than any real match's expected duration — so this
+// only catches matches that are almost certainly stuck, not just a quiet
+// stretch of play.
+const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000;
+
+// No lastUpdatedAt at all (e.g. a match only ever seen via match_status/
+// bet_stop, never a timestamped odds message) is NOT treated as stale —
+// we have no evidence either way, and excluding it would risk hiding a
+// genuinely fresh match just because of which event types happened to
+// arrive for it.
+function isStale(state: MatchState, now: number): boolean {
+  if (state.lastTimestamp === undefined) return false;
+  return now - state.lastTimestamp > STALE_THRESHOLD_MS;
+}
+
 // `event_status` deliberately keeps the feed's own snake_case field name
 // (every other field mirrors the feed's camelCase) — this response is
 // meant to mirror the wire shape as closely as possible rather than
@@ -68,19 +86,36 @@ function toResponseShape(
     // outcomes get their own bucket rather than being forced into won/lost
     // or silently dropped (see settled-bets.ts).
     settledBetCount: settledBetCounts.get(state.matchId) ?? { won: 0, lost: 0, void: 0 },
+    // The internal lastTimestamp (epoch ms), as an ISO string — null when
+    // this match has never had a timestamped message applied (see
+    // isStale's comment above for why that's treated as "unknown", not
+    // "stale").
+    lastUpdatedAt: state.lastTimestamp !== undefined ? new Date(state.lastTimestamp).toISOString() : null,
   };
 }
 
 oddsFeedRouter.get("/live-matches", async (req: Request, res: Response) => {
   const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
   const tournamentIdFilter = typeof req.query.tournamentId === "string" ? req.query.tournamentId : undefined;
+  const includeStale = req.query.includeStale === "true";
 
   const [activeBetCounts, settledBetCounts] = await Promise.all([getActiveBetCounts(), getSettledBetCounts()]);
 
+  const now = Date.now();
+  let staleExcludedCount = 0;
   const matches = [];
   for (const state of matchStore.values()) {
     if (statusFilter !== undefined && state.eventStatus !== statusFilter) continue;
     if (tournamentIdFilter !== undefined && state.tournamentId !== tournamentIdFilter) continue;
+
+    // Only applied for an explicit status=Live request, per what was
+    // asked — fetching everything (no status filter) or another status
+    // entirely never triggers this.
+    if (statusFilter === "Live" && !includeStale && isStale(state, now)) {
+      staleExcludedCount++;
+      continue;
+    }
+
     matches.push(toResponseShape(state, feedStatusStore, activeBetCounts, settledBetCounts));
   }
 
@@ -96,7 +131,7 @@ oddsFeedRouter.get("/live-matches", async (req: Request, res: Response) => {
     producers: Object.fromEntries(feedStatusStore),
   };
 
-  res.json({ matches, feedHealth });
+  res.json({ matches, feedHealth, staleExcludedCount });
 });
 
 // Not gated on the match currently being in matchStore — this is real
