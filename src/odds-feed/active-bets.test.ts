@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeActiveBetCounts } from "./active-bets.js";
+import { computeActiveBetCounts, computeActiveStakeByCurrency } from "./active-bets.js";
 import type { RawBetPlacedRow } from "./active-bets.js";
 
 function row(overrides: Partial<RawBetPlacedRow> = {}): RawBetPlacedRow {
@@ -8,6 +8,8 @@ function row(overrides: Partial<RawBetPlacedRow> = {}): RawBetPlacedRow {
     betId: "bet1",
     status: "open",
     legs: [{ odds: 1.5, matchId: "sr:match:1" }],
+    stake: 10,
+    currency: "INR",
     receivedAt: new Date("2026-09-17T00:00:00.000Z"),
     ...overrides,
   };
@@ -80,4 +82,52 @@ test("a match with no bets at all simply has no entry in the returned map", () =
   const counts = computeActiveBetCounts([], new Set());
   assert.equal(counts.get("sr:match:nonexistent"), undefined);
   assert.equal(counts.size, 0);
+});
+
+test("computeActiveStakeByCurrency: a single active bet's stake is grouped under its currency", () => {
+  const sums = computeActiveStakeByCurrency([row({ stake: 10, currency: "INR" })], new Set());
+  assert.deepEqual(sums.get("sr:match:1"), { INR: 10 });
+});
+
+test("computeActiveStakeByCurrency: two bets in DIFFERENT currencies on the same match are kept separate, not summed together", () => {
+  const bets = [
+    row({ betId: "bet1", stake: 2, currency: "USDT" }),
+    row({ betId: "bet2", stake: 500, currency: "INR" }),
+  ];
+  const sums = computeActiveStakeByCurrency(bets, new Set());
+  assert.deepEqual(sums.get("sr:match:1"), { USDT: 2, INR: 500 });
+});
+
+test("computeActiveStakeByCurrency: two bets in the SAME currency on the same match are summed", () => {
+  const bets = [
+    row({ betId: "bet1", stake: 10, currency: "INR" }),
+    row({ betId: "bet2", stake: 25, currency: "INR" }),
+  ];
+  const sums = computeActiveStakeByCurrency(bets, new Set());
+  assert.deepEqual(sums.get("sr:match:1"), { INR: 35 });
+});
+
+test("computeActiveStakeByCurrency: a multi-leg bet contributes its full stake to EACH match it applies to, not split between them", () => {
+  const bet = row({
+    betId: "bet1",
+    stake: 10,
+    currency: "USDT",
+    legs: [
+      { odds: 1.2, matchId: "sr:match:A" },
+      { odds: 1.3, matchId: "sr:match:B" },
+    ],
+  });
+  const sums = computeActiveStakeByCurrency([bet], new Set());
+  assert.deepEqual(sums.get("sr:match:A"), { USDT: 10 });
+  assert.deepEqual(sums.get("sr:match:B"), { USDT: 10 });
+});
+
+test("computeActiveStakeByCurrency: a settled bet does not contribute, same as computeActiveBetCounts", () => {
+  const sums = computeActiveStakeByCurrency([row({ betId: "bet1" })], new Set(["bet1"]));
+  assert.equal(sums.get("sr:match:1"), undefined);
+});
+
+test("computeActiveStakeByCurrency: a match with no active bets has no entry at all", () => {
+  const sums = computeActiveStakeByCurrency([], new Set());
+  assert.equal(sums.size, 0);
 });

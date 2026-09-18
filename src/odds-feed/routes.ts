@@ -2,7 +2,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { getLiveMatches } from "../crm/index.js";
 import type { GetLiveMatchesResponse } from "../crm/index.js";
-import { getActiveBetCounts } from "./active-bets.js";
+import { getActiveBetCounts, getActiveStakeByCurrency } from "./active-bets.js";
+import type { StakeByCurrency } from "./active-bets.js";
 import { getSettledBetCounts } from "./settled-bets.js";
 import { getMatchBetHistory } from "./match-bet-history.js";
 import { normalizeCrmMatch, computeFeedStatus } from "./crm-live-matches.js";
@@ -50,10 +51,11 @@ export function createOddsFeedRouter(
     const includeStale = req.query.includeStale === "true";
 
     try {
-      const [crmData, activeBetCounts, settledBetCounts] = await Promise.all([
+      const [crmData, activeBetCounts, settledBetCounts, activeStakeByCurrency] = await Promise.all([
         fetchLiveMatches(),
         getActiveBetCounts(),
         getSettledBetCounts(),
+        getActiveStakeByCurrency(),
       ]);
 
       const now = Date.now();
@@ -98,6 +100,13 @@ export function createOddsFeedRouter(
           // active bets — activeBetCounts.get() only has entries for
           // matchIds that actually appear in some real bet's legs[].
           activeBetCount: activeBetCounts.get(normalized.matchId) ?? 0,
+          // Grouped by currency, e.g. { "USDT": 2, "INR": 500 } — never
+          // summed across currencies, since that would be a meaningless
+          // number. Empty object, not undefined/null, when there's no
+          // active stake at all for this match. Same active-bet filtering
+          // and multi-leg consideration as activeBetCount (see
+          // active-bets.ts's getActiveBets/matchIdsForBet).
+          totalActiveStake: activeStakeByCurrency.get(normalized.matchId) ?? ({} as StakeByCurrency),
           // { won, lost, void } rather than one combined number —
           // void/cashed_out outcomes get their own bucket rather than
           // being forced into won/lost or silently dropped.
