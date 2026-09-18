@@ -329,6 +329,44 @@ test("GET /live-matches?status=Live: only returns matches with that normalized e
   assert.ok(!matchIds.includes("TEST_NOT_STARTED_SNAKE"));
 });
 
+test("GET /live-matches?activeOnly=true: includes BOTH Live and Suspended matches, unlike exact status=Live", async () => {
+  const res = await fetch(`${baseUrl}/live-matches?activeOnly=true`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(matchIds.includes("TEST_FRESH_SOCCER"), "a Live match must be included");
+  assert.ok(matchIds.includes("TEST_SUSPENDED_CRICKET"), "a Suspended match must be included -- this is the whole point of activeOnly");
+  assert.ok(!matchIds.includes("TEST_NOT_STARTED_SNAKE"), "NotStarted is not part of the active group");
+});
+
+test("GET /live-matches?status=Live: unchanged by the activeOnly addition -- still excludes Suspended exactly as before", async () => {
+  const res = await fetch(`${baseUrl}/live-matches?status=Live`);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(matchIds.includes("TEST_FRESH_SOCCER"));
+  assert.ok(!matchIds.includes("TEST_SUSPENDED_CRICKET"), "exact status=Live must still exclude Suspended -- activeOnly is additive, not a behavior change");
+});
+
+test("GET /live-matches?activeOnly=true: the staleness filter still applies -- a stale Live match is excluded by default", async () => {
+  const res = await fetch(`${baseUrl}/live-matches?activeOnly=true`);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(!matchIds.includes("TEST_STALE_LIVE"), "activeOnly is one of the 'currently in play' queries staleness filtering applies to");
+  assert.ok(body.staleExcludedCount >= 1);
+});
+
+test("GET /live-matches?activeOnly=true&includeStale=true: bypasses the staleness filter, same as status=Live does", async () => {
+  const res = await fetch(`${baseUrl}/live-matches?activeOnly=true&includeStale=true`);
+  const body = await res.json();
+  const matchIds = body.matches.map((m: any) => m.matchId);
+
+  assert.ok(matchIds.includes("TEST_STALE_LIVE"));
+  assert.equal(body.staleExcludedCount, 0);
+});
+
 test("GET /live-matches?tournamentId=...: known limitation -- always excludes everything, since the CRM never provides a tournamentId", async () => {
   const res = await fetch(`${baseUrl}/live-matches?tournamentId=sr:tournament:anything`);
   const body = await res.json();

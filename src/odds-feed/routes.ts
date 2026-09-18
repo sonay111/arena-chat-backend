@@ -16,6 +16,12 @@ import { normalizeCrmMatch } from "./crm-live-matches.js";
 // a quiet stretch of play.
 const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 
+// The "still in play" group for ?activeOnly=true — Live and Suspended
+// (rain delays, innings breaks, etc.) are both matches a viewer would
+// consider currently active, unlike an exact status=Live lookup which
+// would otherwise make a match vanish the instant it goes Suspended.
+const ACTIVE_STATUSES = new Set(["Live", "Suspended"]);
+
 // No lastUpdatedAt at all is NOT treated as stale — we have no evidence
 // either way, and excluding it would risk hiding a genuinely fresh match.
 // Hasn't actually been observed from the CRM endpoint (every real match so
@@ -49,6 +55,14 @@ export function createOddsFeedRouter(
     const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
     const tournamentIdFilter = typeof req.query.tournamentId === "string" ? req.query.tournamentId : undefined;
     const includeStale = req.query.includeStale === "true";
+    // New, additive param — existing exact-match `status=X` behavior is
+    // completely untouched by this (see the branch below): a caller doing
+    // status=Live today gets byte-identical results tomorrow. activeOnly
+    // takes priority over `status` if both are somehow passed together,
+    // since asking for "active" and an exact status at once is
+    // self-contradictory — documented here rather than silently ANDing
+    // the two into a confusing result.
+    const activeOnly = req.query.activeOnly === "true";
 
     try {
       const [crmData, activeBetCounts, settledBetCounts, activeStakeByCurrency] = await Promise.all([
@@ -65,17 +79,23 @@ export function createOddsFeedRouter(
       for (const rawMatch of crmData.matches) {
         const normalized = normalizeCrmMatch(rawMatch);
 
-        if (statusFilter !== undefined && normalized.eventStatus !== statusFilter) continue;
+        if (activeOnly) {
+          if (!ACTIVE_STATUSES.has(normalized.eventStatus)) continue;
+        } else if (statusFilter !== undefined && normalized.eventStatus !== statusFilter) {
+          continue;
+        }
         // tournamentId is always null from this source (see
         // crm-live-matches.ts) -- this filter has nothing left to match
         // against and will exclude everything if used. Not special-cased
         // away; left as a real, known limitation.
         if (tournamentIdFilter !== undefined && normalized.tournamentId !== tournamentIdFilter) continue;
 
-        // Only applied for an explicit status=Live request, per what was
-        // asked — fetching everything (no status filter) or another
-        // status entirely never triggers this.
-        if (statusFilter === "Live" && !includeStale && isStale(normalized.lastUpdatedAtMs, now)) {
+        // Applied for activeOnly=true or an explicit status=Live request —
+        // both are asking for "what's currently in play," and a match
+        // stuck in Suspended for hours is just as likely to be genuinely
+        // stuck as one stuck in Live. Fetching everything (no filter) or
+        // any other exact status never triggers this.
+        if ((activeOnly || statusFilter === "Live") && !includeStale && isStale(normalized.lastUpdatedAtMs, now)) {
           staleExcludedCount++;
           continue;
         }
