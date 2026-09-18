@@ -74,3 +74,23 @@ export type BetSummary = {
   customerGGR: number;
   customerNGR: number;
 };
+
+// /crm/live-matches — confirmed live 2026-09-18. No matching doc exists
+// (checked every file in docs/); this shape is purely from a real captured
+// response. Two real quirks worth knowing before using this type: `status`
+// is inconsistently cased upstream ("Live"/"Suspended"/"NotStarted" AND
+// "not_started" all appeared across the same response — see
+// src/odds-feed/crm-live-matches.ts's normalizeMatchStatus), and there's no
+// per-match tournamentId, countryCode, or producerId at all, unlike our
+// former odds-feed-derived shape.
+export type CrmLiveMatch = {
+  matchId: string;
+  status: string;
+  sportName: string;
+  team1Name: string;
+  team2Name: string;
+  tournamentName: string;
+  region: string | null;
+  startTime: string;
+  updatedAt: string;
+};

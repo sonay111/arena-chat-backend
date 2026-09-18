@@ -7,6 +7,7 @@ import type {
   CasinoSession,
   ActiveBonus,
   BetSummary,
+  CrmLiveMatch,
 } from "./types.js";
 
 type PageParams = { page?: number; limit?: number };
@@ -234,4 +235,26 @@ export async function getAllActiveBonuses(
     bonuses: json.data.activeBonuses,
     pagination: toPagination(json.data),
   };
+}
+
+export type GetLiveMatchesResponse = {
+  matches: CrmLiveMatch[];
+  totalData: number;
+  // producerId -> connected. Confirmed live 2026-09-18: {"1":true,"3":true,
+  // "4":true,"5":true}. No per-match link to any of these -- it's a single
+  // global snapshot for the whole response, not indexable by match.
+  feed: Record<string, boolean>;
+};
+
+// No pagination params observed or documented for this endpoint (the one
+// real response captured so far returned all 10 then-live matches with no
+// page/limit needed) -- if the real live-match count ever grows much
+// larger, this may need revisiting.
+export function parseLiveMatchesResponse(json: { data: GetLiveMatchesResponse }): GetLiveMatchesResponse {
+  return json.data;
+}
+
+export async function getLiveMatches(): Promise<GetLiveMatchesResponse> {
+  const json = await crmGet<{ status: boolean; message: string; data: GetLiveMatchesResponse }>("/crm/live-matches");
+  return parseLiveMatchesResponse(json);
 }
