@@ -213,14 +213,14 @@ test("Payments: category status is worst-of-gateways (real shape: one delayed ga
   assert.equal(payments.status, "delayed");
 });
 
-test("CRM: maps the crm entry's flows[] directly, fully real (real shape: unknown x3 + ok -> parent ok)", () => {
+test("CRM: maps the crm entry as a single 'CRM & FastTrack' parent row over its 4 flows, same pattern as every other group (real shape: unknown x3 + ok -> parent ok)", () => {
   const crm = rawCheck({
     key: "crm",
     label: "CRM & FastTrack",
     status: "ok",
     flows: [
       rawCheck({ key: "outbound_webhook", status: "unknown" }),
-      rawCheck({ key: "inbound_api", label: "CRM Inbound API", method: "inbound", status: "ok" }),
+      rawCheck({ key: "inbound_api", label: "CRM Inbound API", method: "inbound", status: "ok", lastSuccessAt: "2026-09-22T04:14:08.750Z" }),
       rawCheck({ key: "fasttrack_outbound", status: "unknown" }),
       rawCheck({ key: "fasttrack_inbound", status: "unknown" }),
     ],
@@ -229,8 +229,16 @@ test("CRM: maps the crm entry's flows[] directly, fully real (real shape: unknow
   const crmCategory = result.categories.find((c) => c.key === "crm")!;
   assert.equal(crmCategory.realCoverage, "full");
   assert.equal(crmCategory.status, "ok");
-  assert.equal(crmCategory.checks.length, 4);
-  assert.equal((crmCategory.checks[1] as NormalizedLeaf).kind, "leaf", "CRM flows are flattened directly, no extra group wrapper");
+  assert.equal(crmCategory.checks.length, 1, "one parent row, not the 4 flows flattened onto the category directly");
+
+  const group = crmCategory.checks[0] as NormalizedGroup;
+  assert.equal(group.kind, "group");
+  assert.equal(group.key, "crm");
+  assert.equal(group.label, "CRM & FastTrack");
+  assert.equal(group.status, "ok");
+  assert.equal(group.lastSuccessAt, "2026-09-22T04:14:08.750Z", "rolled up from the one real ok flow, same as every other group");
+  assert.equal(group.issueDetail, null, "ok status -- nothing to point at");
+  assert.equal(group.children.length, 4);
 });
 
 test("CRM: not_integrated when the crm entry is entirely absent", () => {

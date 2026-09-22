@@ -147,14 +147,19 @@ function buildPayments(data: RawEntry[], checkedAt: string): NormalizedCategory 
   };
 }
 
-function buildCrm(data: RawEntry[]): NormalizedCategory {
+// Wrapped in a group the same way every other flows[]/steps[] source is
+// (payment gateways, business_flow_deposit, OneSignal/In-App) -- CRM used
+// to flatten its flows directly onto the category with no parent row,
+// which meant no single place to see its own rolled-up lastSuccessAt/
+// issueDetail without looking at all 4 flows individually.
+function buildCrm(data: RawEntry[], checkedAt: string): NormalizedCategory {
   const entry = findByKey(data, "crm");
-  const checks = entry?.flows ? entry.flows.map(toLeaf) : [];
+  const checks = entry?.flows ? [toGroup(entry, entry.flows, checkedAt)] : [];
 
   return {
     key: "crm",
     label: "CRM",
-    status: entry ? aggregateStatus(checks.map((c) => c.status)) : "not_integrated",
+    status: entry ? aggregateStatus(checks.map(statusOf)) : "not_integrated",
     realCoverage: entry ? "full" : "none",
     checks,
   };
@@ -246,7 +251,7 @@ export function normalizeServiceHealth(
     checkedAt: raw.checkedAt,
     categories: [
       buildPayments(raw.data, raw.checkedAt),
-      buildCrm(raw.data),
+      buildCrm(raw.data, raw.checkedAt),
       buildNotifications(raw.data, raw.checkedAt),
       buildCasino(raw.data),
       sportsbook,
