@@ -7,6 +7,7 @@ import type {
   NormalizedNode,
   NormalizedCategory,
   NormalizedServiceHealth,
+  StatusValue,
 } from "./types.js";
 import { aggregateStatus } from "./aggregate.js";
 
@@ -24,16 +25,74 @@ function toLeaf(raw: RawCheck): NormalizedLeaf {
   };
 }
 
-// Used for both flows[] (payment gateways, CRM, notifications) and
-// steps[] (the deposit business flow) -- same shape, different field name
-// on the raw entry, same aggregation rule either way.
-function toGroup(entry: RawEntry, children: RawCheck[]): NormalizedGroup {
+// Compact "1d 22h ago" / "3h 12m ago" / "45m ago" / "just now" -- matches
+// how far back a check last succeeded/failed, without needing a full date.
+function humanizeAge(ms: number): string {
+  const minutes = Math.floor(Math.max(ms, 0) / 60_000);
+  if (minutes < 1) return "just now";
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h ago`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m ago`;
+  return `${minutes}m ago`;
+}
+
+// Most-recent-wins across every descendant leaf, recursing through nested
+// groups (none exist in real data today, but the type is recursive).
+function latestTimestamp(children: NormalizedNode[], field: "lastSuccessAt" | "lastFailureAt"): string | null {
+  let latest: string | null = null;
+  for (const child of children) {
+    const candidate = child.kind === "leaf" ? child[field] : latestTimestamp(child.children, field);
+    if (candidate && (!latest || new Date(candidate).getTime() > new Date(latest).getTime())) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
+
+// The first leaf, in original order, at the same severity as the group's
+// own worst-of-children status -- same child aggregateStatus itself would
+// point to. Recurses into a nested group only if that group's own status
+// matches (its worst leaf is somewhere inside it).
+function findResponsibleLeaf(children: NormalizedNode[], targetStatus: StatusValue): NormalizedLeaf | undefined {
+  for (const child of children) {
+    if (child.status !== targetStatus) continue;
+    if (child.kind === "leaf") return child;
+    const nested = findResponsibleLeaf(child.children, targetStatus);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function describeIssue(children: NormalizedNode[], status: StatusValue, checkedAt: string): string | null {
+  if (status !== "delayed" && status !== "down") return null;
+  const leaf = findResponsibleLeaf(children, status);
+  if (!leaf) return null;
+
+  const ageText = leaf.lastSuccessAt
+    ? `last succeeded ${humanizeAge(new Date(checkedAt).getTime() - new Date(leaf.lastSuccessAt).getTime())}`
+    : "no successful check recorded";
+  return `${leaf.label} ${status} — ${ageText}`;
+}
+
+// Used for both flows[] (payment gateways, notifications) and steps[]
+// (the deposit business flow) -- same shape, different field name on the
+// raw entry, same aggregation rule either way. checkedAt is Satyam's own
+// "as of" timestamp for this response, not our wall clock -- it's what
+// every child's own age is measured against, so the issue detail's "last
+// succeeded Nd Nh ago" stays consistent with that.
+function toGroup(entry: RawEntry, children: RawCheck[], checkedAt: string): NormalizedGroup {
   const normalizedChildren = children.map(toLeaf);
+  const status = aggregateStatus(normalizedChildren.map((c) => c.status));
   return {
     kind: "group",
     key: entry.key,
     label: entry.label,
-    status: aggregateStatus(normalizedChildren.map((c) => c.status)),
+    status,
+    lastSuccessAt: latestTimestamp(normalizedChildren, "lastSuccessAt"),
+    lastFailureAt: latestTimestamp(normalizedChildren, "lastFailureAt"),
+    responseTimeMs: null,
+    issueDetail: describeIssue(normalizedChildren, status, checkedAt),
     children: normalizedChildren,
   };
 }
@@ -42,9 +101,9 @@ function toGroup(entry: RawEntry, children: RawCheck[]): NormalizedGroup {
 // this module -- callers pass entry.flows/entry.steps through in the
 // order the CRM returned them, which matters most for business_flow_deposit
 // (an ordered causal chain, not an unordered set of checks).
-function toNode(entry: RawEntry): NormalizedNode {
-  if (entry.flows) return toGroup(entry, entry.flows);
-  if (entry.steps) return toGroup(entry, entry.steps);
+function toNode(entry: RawEntry, checkedAt: string): NormalizedNode {
+  if (entry.flows) return toGroup(entry, entry.flows, checkedAt);
+  if (entry.steps) return toGroup(entry, entry.steps, checkedAt);
   return toLeaf(entry);
 }
 
@@ -74,10 +133,10 @@ const PAYMENT_KEYS = [
   "ocr_deposit_slip",
 ];
 
-function buildPayments(data: RawEntry[]): NormalizedCategory {
+function buildPayments(data: RawEntry[], checkedAt: string): NormalizedCategory {
   const checks = PAYMENT_KEYS.map((key) => findByKey(data, key))
     .filter((entry): entry is RawEntry => entry !== undefined)
-    .map(toNode);
+    .map((entry) => toNode(entry, checkedAt));
 
   return {
     key: "payments",
@@ -106,10 +165,10 @@ function buildCrm(data: RawEntry[]): NormalizedCategory {
 // still tell OneSignal apart from in-app delivery.
 const NOTIFICATION_SOURCE_KEYS = ["onesignal", "notifications"];
 
-function buildNotifications(data: RawEntry[]): NormalizedCategory {
+function buildNotifications(data: RawEntry[], checkedAt: string): NormalizedCategory {
   const checks = NOTIFICATION_SOURCE_KEYS.map((key) => findByKey(data, key))
     .filter((entry): entry is RawEntry => entry !== undefined)
-    .map(toNode);
+    .map((entry) => toNode(entry, checkedAt));
 
   return {
     key: "notifications",
@@ -148,12 +207,12 @@ function notIntegratedCategory(key: string, label: string): NormalizedCategory {
   };
 }
 
-function buildOther(data: RawEntry[]): NormalizedCategory {
+function buildOther(data: RawEntry[], checkedAt: string): NormalizedCategory {
   const checks: NormalizedNode[] = [];
 
   const depositFlow = findByKey(data, "business_flow_deposit");
   if (depositFlow?.steps) {
-    checks.push(toGroup(depositFlow, depositFlow.steps));
+    checks.push(toGroup(depositFlow, depositFlow.steps, checkedAt));
   }
 
   // Synthetic-entry handling: method "n/a" marks a check against a
@@ -186,14 +245,14 @@ export function normalizeServiceHealth(
   return {
     checkedAt: raw.checkedAt,
     categories: [
-      buildPayments(raw.data),
+      buildPayments(raw.data, raw.checkedAt),
       buildCrm(raw.data),
-      buildNotifications(raw.data),
+      buildNotifications(raw.data, raw.checkedAt),
       buildCasino(raw.data),
       sportsbook,
       notIntegratedCategory("kyc_risk", "KYC & Risk"),
       notIntegratedCategory("comms", "Comms"),
-      buildOther(raw.data),
+      buildOther(raw.data, raw.checkedAt),
     ],
   };
 }

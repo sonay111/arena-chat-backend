@@ -67,6 +67,24 @@ export type NormalizedGroup = {
   key: string;
   label: string;
   status: StatusValue;
+  // Derived from children, not passed through from any single raw field --
+  // the raw parent entry itself carries none of these (confirmed live
+  // 2026-09-22: a flows[]/steps[] parent's own lastSuccessAt/lastFailureAt
+  // are always null in the real response). Most-recent-wins across every
+  // descendant leaf (recursing through nested groups, though none exist
+  // in real data today).
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  // Deliberately always null -- averaging response time across flows that
+  // check different things isn't meaningful. Expand to see each flow's own
+  // responseTimeMs instead.
+  responseTimeMs: null;
+  // Only set when status is delayed/down: names the single child (the
+  // first one, in original order, at the same severity as the group's own
+  // worst-of-children status) actually responsible, plus how long it's
+  // been since that child last succeeded. Null when status is ok/unknown
+  // -- there's no single "issue" to point at.
+  issueDetail: string | null;
   children: NormalizedNode[];
   note?: string;
 };

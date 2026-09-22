@@ -74,6 +74,115 @@ test("Payments: maps all 8 real gateways, each as a group of its own flows (real
   assert.equal(group.children.length, 5);
 });
 
+test("Payments: a group's lastSuccessAt is the most recent among its children (real pay777 shape: two delayed flows with different lastSuccessAt)", () => {
+  const pay777 = rawCheck({
+    key: "pay777",
+    label: "Pay777",
+    status: "delayed",
+    flows: [
+      rawCheck({ key: "payin_initiate", label: "Payin Initiate", status: "delayed", lastSuccessAt: "2026-09-20T10:03:01.269Z" }),
+      rawCheck({ key: "payin_webhook", label: "Payin Webhook", status: "delayed", lastSuccessAt: "2026-09-20T10:30:00.863Z" }),
+      rawCheck({ key: "payout_webhook", status: "unknown" }),
+    ],
+  });
+  const result = normalizeServiceHealth(buildRaw([pay777]), SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "payments")!.checks[0]) as NormalizedGroup;
+  assert.equal(group.lastSuccessAt, "2026-09-20T10:30:00.863Z", "the later of the two delayed flows' timestamps wins");
+});
+
+test("Payments: a group's issueDetail names the first flow at the worst severity, with a humanized age (real pay777 shape)", () => {
+  const pay777raw: RawServiceHealthResponse = {
+    status: true,
+    checkedAt: "2026-09-22T10:00:00.000Z",
+    summary: { total: 1, worst: "delayed", ok: 0, delayed: 1, down: 0, unknown: 0 },
+    data: [
+      rawCheck({
+        key: "pay777",
+        label: "Pay777",
+        status: "delayed",
+        flows: [
+          rawCheck({ key: "payin_initiate", label: "Payin Initiate", status: "delayed", lastSuccessAt: "2026-09-20T12:00:00.000Z" }),
+          rawCheck({ key: "payin_webhook", label: "Payin Webhook", status: "delayed", lastSuccessAt: "2026-09-21T12:00:00.000Z" }),
+          rawCheck({ key: "payout_webhook", status: "unknown" }),
+        ],
+      }),
+    ],
+  };
+  const result = normalizeServiceHealth(pay777raw, SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "payments")!.checks[0]) as NormalizedGroup;
+  assert.equal(
+    group.issueDetail,
+    "Payin Initiate delayed — last succeeded 1d 22h ago",
+    "the FIRST delayed flow in original order is named, not the one with the oldest/newest success"
+  );
+});
+
+test("Payments: a group's issueDetail is null when status is ok (real rolezpay shape), not just when it's unknown", () => {
+  const rolezpay = rawCheck({
+    key: "rolezpay",
+    status: "ok",
+    flows: [
+      rawCheck({ key: "payin_initiate", status: "unknown" }),
+      rawCheck({ key: "ping", label: "Balance Ping", status: "ok", lastSuccessAt: "2026-09-22T04:10:00.968Z" }),
+    ],
+  });
+  const result = normalizeServiceHealth(buildRaw([rolezpay]), SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "payments")!.checks[0]) as NormalizedGroup;
+  assert.equal(group.issueDetail, null);
+});
+
+test("Payments: issueDetail falls back to 'no successful check recorded' when the responsible flow has never succeeded", () => {
+  const pay777 = rawCheck({
+    key: "pay777",
+    status: "delayed",
+    flows: [rawCheck({ key: "payin_initiate", label: "Payin Initiate", status: "delayed", lastSuccessAt: null })],
+  });
+  const result = normalizeServiceHealth(buildRaw([pay777]), SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "payments")!.checks[0]) as NormalizedGroup;
+  assert.equal(group.issueDetail, "Payin Initiate delayed — no successful check recorded");
+});
+
+test("Payments: a group's lastFailureAt is the most recent among its children when any child has failed", () => {
+  const pay777 = rawCheck({
+    key: "pay777",
+    status: "down",
+    flows: [
+      rawCheck({ key: "payin_initiate", status: "down", lastFailureAt: "2026-09-21T00:00:00.000Z" }),
+      rawCheck({ key: "payin_webhook", status: "down", lastFailureAt: "2026-09-22T00:00:00.000Z" }),
+    ],
+  });
+  const result = normalizeServiceHealth(buildRaw([pay777]), SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "payments")!.checks[0]) as NormalizedGroup;
+  assert.equal(group.lastFailureAt, "2026-09-22T00:00:00.000Z");
+});
+
+test("Payments: a group's responseTimeMs always stays null -- averaging across flows isn't meaningful", () => {
+  const pay777 = rawCheck({
+    key: "pay777",
+    status: "delayed",
+    flows: [rawCheck({ key: "payin_initiate", status: "delayed", responseTimeMs: 889 })],
+  });
+  const result = normalizeServiceHealth(buildRaw([pay777]), SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "payments")!.checks[0]) as NormalizedGroup;
+  assert.equal(group.responseTimeMs, null);
+});
+
+test("Other: business_flow_deposit's group also gets derived summary fields, same as a payment gateway", () => {
+  const deposit = rawCheck({
+    key: "business_flow_deposit",
+    label: "Deposit → Wallet Credit",
+    status: "down",
+    steps: [
+      rawCheck({ key: "callback_received", label: "Gateway Callback Received", status: "down", lastSuccessAt: "2026-09-20T00:00:00.000Z" }),
+      rawCheck({ key: "transaction_updated", status: "unknown" }),
+    ],
+  });
+  const result = normalizeServiceHealth(buildRaw([deposit]), SPORTSBOOK_STUB);
+  const group = (result.categories.find((c) => c.key === "other")!.checks[0]) as NormalizedGroup;
+  assert.equal(group.lastSuccessAt, "2026-09-20T00:00:00.000Z");
+  assert.ok(group.issueDetail!.startsWith("Gateway Callback Received down —"), "issueDetail names the down step");
+});
+
 test("Payments: a gateway missing from the real response is simply omitted, not fabricated", () => {
   const pay777 = rawCheck({ key: "pay777", label: "Pay777", status: "delayed", flows: [rawCheck({ status: "delayed" })] });
   const result = normalizeServiceHealth(buildRaw([pay777]), SPORTSBOOK_STUB);
