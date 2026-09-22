@@ -9,6 +9,7 @@ import { activityRouter } from "./activity/index.js";
 import { playersRouter } from "./players/index.js";
 import { goalInferenceRouter } from "./goal-inference/index.js";
 import { startOddsFeed, oddsFeedRouter } from "./odds-feed/index.js";
+import { serviceHealthRouter } from "./service-health/index.js";
 
 // TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
 // Satyam's team yet, so every real CRM lookup below currently fails with
@@ -48,6 +49,7 @@ app.use(activityRouter);
 app.use(playersRouter);
 app.use(goalInferenceRouter);
 app.use(oddsFeedRouter);
+app.use(serviceHealthRouter);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later
