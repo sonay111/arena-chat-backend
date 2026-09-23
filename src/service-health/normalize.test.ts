@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeServiceHealth, findEntry, toLeaf, toGroup } from "./normalize.js";
+import { normalizeServiceHealth, findEntry, toLeaf, toGroup, toNode } from "./normalize.js";
 import type { RawEntry, RawServiceHealthResponse, NormalizedCategory, NormalizedGroup, NormalizedLeaf } from "./types.js";
 
 // Trimmed but real-shaped fixture -- field values below mirror the real
@@ -290,13 +290,159 @@ test("Casino: not_integrated when st8_casino_callbacks is absent", () => {
   assert.equal(casino.realCoverage, "none");
 });
 
-test("Sportsbook: passed through untouched from the injected sportsbook category (not derived from /service-health at all)", () => {
-  const st8 = rawCheck({ service: "casino", key: "st8_casino_callbacks", status: "ok" });
-  const result = normalizeServiceHealth(buildRaw([st8]), SPORTSBOOK_STUB);
-  assert.deepEqual(result.categories.find((c) => c.key === "sportsbook"), SPORTSBOOK_STUB);
+// Sportsbook is two separate, visible rows: "Our Connection" (exactly
+// today's existing derivation, from sportsbook.ts's computeSportsbookHealth
+// -- passed in here as ourConnectionSource, untouched, just re-wrapped
+// into a named group) and "Provider Health" (new: 6 real checks from
+// /service-health that no other category covers).
+
+test("Sportsbook: emits exactly two top-level rows, Our Connection and Provider Health", () => {
+  const result = normalizeServiceHealth(buildRaw([]), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  assert.deepEqual(
+    sportsbook.checks.map((c) => c.key),
+    ["our_connection", "provider_health"]
+  );
+  assert.ok(sportsbook.checks.every((c) => c.kind === "group"), "both rows are groups, not bare leaves");
 });
 
-test("KYC & Risk and Comms: always not_integrated regardless of what's in the raw response", () => {
+test("Our Connection: wraps the injected category's own checks completely untouched, not derived from /service-health at all", () => {
+  const ourConnectionSource: NormalizedCategory = {
+    key: "sportsbook",
+    label: "Sportsbook",
+    status: "down",
+    realCoverage: "full",
+    checks: [
+      { kind: "leaf", key: "odds_feed_connection", label: "Odds Feed Connection", method: "internal", status: "down", lastSuccessAt: null, lastFailureAt: null, lastError: null, responseTimeMs: null },
+      { kind: "leaf", key: "producer_status", label: "Producer Status (current live matches)", method: "internal", status: "ok", lastSuccessAt: null, lastFailureAt: null, lastError: null, responseTimeMs: null },
+    ],
+  };
+  const result = normalizeServiceHealth(buildRaw([]), ourConnectionSource);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  const ourConnection = sportsbook.checks.find((c) => c.key === "our_connection") as NormalizedGroup;
+
+  assert.equal(ourConnection.label, "Our Connection");
+  assert.deepEqual(ourConnection.children, ourConnectionSource.checks, "the two underlying signals are passed through completely untouched");
+  assert.equal(ourConnection.status, "down", "worst-of the two untouched leaves -- same aggregation rule as everywhere else");
+});
+
+test("Provider Health: aggregates the 6 real checks (real shape: all 6 ok)", () => {
+  const entries = [
+    rawCheck({ service: "socket", key: "socket_connections", label: "Live Odds Broadcast", method: "poll", status: "ok", lastSuccessAt: "2026-09-23T04:39:49.474Z", responseTimeMs: 1 }),
+    rawCheck({ service: "socket", key: "sr_bet_settlement", label: "Market Settlement Feed", method: "poll", status: "ok", lastSuccessAt: "2026-09-23T04:39:50.034Z", responseTimeMs: 21 }),
+    rawCheck({ service: "socket", key: "sr_bet_settlement_processing", label: "Bet Settlement Processing", method: "poll", status: "ok", lastSuccessAt: "2026-09-23T00:38:18.838Z", responseTimeMs: 33 }),
+    rawCheck({ service: "socket", key: "sr_tier1_settlement_sla", label: "Tier 1 Settlement SLA (5min)", method: "poll", status: "ok", lastSuccessAt: "2026-09-23T04:39:39.275Z", responseTimeMs: 1 }),
+    rawCheck({ service: "odds_streamer", key: "partner_odds_feed_relay", label: "Outbound Odds Feed to Partners", method: "poll", status: "ok", lastSuccessAt: "2026-09-23T04:39:49.474Z", responseTimeMs: 1 }),
+    // Real duplicate: also exists under service "socket" with identical data -- see the dedup test below.
+    rawCheck({ service: "odds_streamer", key: "sportsradar_producer_connection", label: "SportRadar Producer Connection", method: "poll", status: "ok", lastSuccessAt: "2026-09-23T04:39:37.098Z", responseTimeMs: 2 }),
+  ];
+  const result = normalizeServiceHealth(buildRaw(entries), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  const providerHealth = sportsbook.checks.find((c) => c.key === "provider_health") as NormalizedGroup;
+
+  assert.equal(providerHealth.label, "Provider Health");
+  assert.equal(providerHealth.children.length, 6);
+  assert.equal(providerHealth.status, "ok");
+  assert.deepEqual(
+    providerHealth.children.map((c) => c.key),
+    [
+      "socket_connections",
+      "sr_bet_settlement",
+      "sr_bet_settlement_processing",
+      "sr_tier1_settlement_sla",
+      "partner_odds_feed_relay",
+      "sportsradar_producer_connection",
+    ]
+  );
+});
+
+test("Provider Health: the SportRadar Producer Connection duplicate (service socket vs odds_streamer, real collision) only appears once, using the odds_streamer instance", () => {
+  const socketVariant = rawCheck({ service: "socket", key: "sportsradar_producer_connection", label: "SportRadar Producer Connection", method: "poll", status: "ok", responseTimeMs: 2 });
+  const oddsStreamerVariant = rawCheck({ service: "odds_streamer", key: "sportsradar_producer_connection", label: "SportRadar Producer Connection", method: "poll", status: "delayed", responseTimeMs: 999 });
+  const result = normalizeServiceHealth(buildRaw([socketVariant, oddsStreamerVariant]), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  const providerHealth = sportsbook.checks.find((c) => c.key === "provider_health") as NormalizedGroup;
+
+  const producerConnectionNodes = providerHealth.children.filter((c) => c.key === "sportsradar_producer_connection");
+  assert.equal(producerConnectionNodes.length, 1, "only one instance, never both");
+  assert.equal((producerConnectionNodes[0] as NormalizedLeaf).status, "delayed", "the odds_streamer instance was picked, not the socket one (status differs between the two fixtures specifically to prove which was chosen)");
+});
+
+test("Provider Health: status reflects a real down/delayed child among otherwise-ok checks", () => {
+  const entries = [
+    rawCheck({ service: "socket", key: "socket_connections", status: "ok" }),
+    rawCheck({ service: "socket", key: "sr_bet_settlement", status: "ok" }),
+    rawCheck({ service: "socket", key: "sr_bet_settlement_processing", status: "down" }),
+    rawCheck({ service: "socket", key: "sr_tier1_settlement_sla", status: "ok" }),
+    rawCheck({ service: "odds_streamer", key: "partner_odds_feed_relay", status: "ok" }),
+    rawCheck({ service: "odds_streamer", key: "sportsradar_producer_connection", status: "ok" }),
+  ];
+  const result = normalizeServiceHealth(buildRaw(entries), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  const providerHealth = sportsbook.checks.find((c) => c.key === "provider_health") as NormalizedGroup;
+
+  assert.equal(providerHealth.status, "down");
+  assert.equal(sportsbook.status, "down", "the whole Sportsbook category reflects Provider Health's down status too");
+});
+
+test("Provider Health: missing entries are simply omitted, not fabricated (empty raw data)", () => {
+  const result = normalizeServiceHealth(buildRaw([]), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  const providerHealth = sportsbook.checks.find((c) => c.key === "provider_health") as NormalizedGroup;
+  assert.equal(providerHealth.children.length, 0);
+  assert.equal(providerHealth.status, "unknown");
+});
+
+test("Sportsbook: sportsradar_live_tracker and sportsradar_back_office appear as flat top-level rows, clearly separate from Provider Health's 6 real checks", () => {
+  const liveTracker = rawCheck({
+    service: "admin-api",
+    key: "sportsradar_live_tracker",
+    label: "SportRadar Live Match Tracker / Stats Widget",
+    status: "pending_setup",
+    note: "Frontend-embedded third-party widget (arenav3frontend) — no backend call in these services to monitor.",
+    flows: [],
+  });
+  const backOffice = rawCheck({
+    service: "admin-api",
+    key: "sportsradar_back_office",
+    label: "SportRadar Back Office Access",
+    status: "pending_setup",
+    note: "SportRadar's own admin panel, not proxied through any of our services — would need a dedicated uptime probe of their URL if this is wanted.",
+    flows: [],
+  });
+  const socketConnections = rawCheck({ service: "socket", key: "socket_connections", status: "ok" });
+  const result = normalizeServiceHealth(buildRaw([liveTracker, backOffice, socketConnections]), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+
+  assert.deepEqual(
+    sportsbook.checks.map((c) => c.key),
+    ["our_connection", "provider_health", "sportsradar_live_tracker", "sportsradar_back_office"]
+  );
+  const providerHealth = sportsbook.checks.find((c) => c.key === "provider_health") as NormalizedGroup;
+  assert.equal(
+    providerHealth.children.find((c) => c.key === "sportsradar_live_tracker" || c.key === "sportsradar_back_office"),
+    undefined,
+    "the two pending entries never end up inside Provider Health's children"
+  );
+
+  const liveTrackerNode = sportsbook.checks.find((c) => c.key === "sportsradar_live_tracker") as NormalizedLeaf;
+  assert.equal(liveTrackerNode.status, "pending_setup");
+  assert.equal(
+    liveTrackerNode.sourceNote,
+    "Frontend-embedded third-party widget (arenav3frontend) — no backend call in these services to monitor."
+  );
+});
+
+test("Sportsbook: category status still reflects Provider Health/Our Connection -- the two pending_setup rows don't drag it down", () => {
+  const liveTracker = rawCheck({ service: "admin-api", key: "sportsradar_live_tracker", status: "pending_setup", flows: [] });
+  const backOffice = rawCheck({ service: "admin-api", key: "sportsradar_back_office", status: "pending_setup", flows: [] });
+  const socketConnections = rawCheck({ service: "socket", key: "socket_connections", status: "ok" });
+  const result = normalizeServiceHealth(buildRaw([liveTracker, backOffice, socketConnections]), SPORTSBOOK_STUB);
+  const sportsbook = result.categories.find((c) => c.key === "sportsbook")!;
+  assert.equal(sportsbook.status, "ok");
+});
+
+test("KYC & Risk and Comms: not_integrated only when none of their real entries are present at all", () => {
   const result = normalizeServiceHealth(buildRaw([]), SPORTSBOOK_STUB);
   const kyc = result.categories.find((c) => c.key === "kyc_risk")!;
   const comms = result.categories.find((c) => c.key === "comms")!;
@@ -304,6 +450,106 @@ test("KYC & Risk and Comms: always not_integrated regardless of what's in the ra
   assert.equal(kyc.checks.length, 0);
   assert.equal(comms.status, "not_integrated");
   assert.equal(comms.checks.length, 0);
+});
+
+// --- KYC & Risk (real entries wired in 2026-09-23) ---------------------
+
+test("KYC & Risk: includes both real frogo_risk_signal entries (investigated: different labels + different slowMs -- two distinct real checks, not a duplicate), plus frogo and kyc_shifty_pro", () => {
+  const frogoPayment = rawCheck({ service: "payment", key: "frogo_risk_signal", label: "Frogo Risk Scoring", status: "unknown" });
+  const frogoSocket = rawCheck({ service: "socket", key: "frogo_risk_signal", label: "Frogo Risk Scoring (Bet Settlement)", status: "unknown" });
+  const frogoIntelligence = rawCheck({
+    service: "admin-api",
+    key: "frogo",
+    label: "Frogo Risk Intelligence",
+    status: "unknown",
+    flows: [rawCheck({ key: "risk_signal", label: "Deposit / Withdrawal Risk Scoring", status: "unknown" })],
+  });
+  const kycShiftyPro = rawCheck({
+    service: "admin-api",
+    key: "kyc_shifty_pro",
+    label: "KYC (Shifty Pro)",
+    status: "pending_setup",
+    note: "Future integration per requirements — no Shifty Pro (or any KYC provider) integration exists in code yet.",
+    flows: [],
+  });
+  const result = normalizeServiceHealth(buildRaw([frogoPayment, frogoSocket, frogoIntelligence, kycShiftyPro]), SPORTSBOOK_STUB);
+  const kyc = result.categories.find((c) => c.key === "kyc_risk")!;
+
+  assert.equal(kyc.realCoverage, "partial");
+  assert.deepEqual(
+    kyc.checks.map((c) => c.key),
+    ["frogo_risk_signal", "frogo_risk_signal", "frogo", "kyc_shifty_pro"]
+  );
+  // Both frogo_risk_signal entries present, clearly labeled differently --
+  // neither dropped, per the "different -> show both" rule.
+  const [paymentNode, socketNode] = kyc.checks as NormalizedLeaf[];
+  assert.equal(paymentNode.label, "Frogo Risk Scoring");
+  assert.equal(socketNode.label, "Frogo Risk Scoring (Bet Settlement)");
+});
+
+test("KYC & Risk: kyc_shifty_pro's real sourceNote is the explanation, not a generic placeholder", () => {
+  const kycShiftyPro = rawCheck({
+    service: "admin-api",
+    key: "kyc_shifty_pro",
+    label: "KYC (Shifty Pro)",
+    status: "pending_setup",
+    note: "Future integration per requirements — no Shifty Pro (or any KYC provider) integration exists in code yet.",
+    flows: [],
+  });
+  const result = normalizeServiceHealth(buildRaw([kycShiftyPro]), SPORTSBOOK_STUB);
+  const kyc = result.categories.find((c) => c.key === "kyc_risk")!;
+  const node = kyc.checks.find((c) => c.key === "kyc_shifty_pro") as NormalizedLeaf;
+  assert.equal(node.status, "pending_setup");
+  assert.equal(node.sourceNote, "Future integration per requirements — no Shifty Pro (or any KYC provider) integration exists in code yet.");
+});
+
+// --- Comms (real entries wired in 2026-09-23) --------------------------
+
+test("Comms: includes wati_messaging, sms (2 flows), otp (1 flow), and calling_system (pending_setup)", () => {
+  const wati = rawCheck({ service: "payment", key: "wati_messaging", label: "Wati (WhatsApp)", status: "unknown" });
+  const sms = rawCheck({
+    service: "admin-api",
+    key: "sms",
+    label: "SMS Delivery",
+    status: "unknown",
+    flows: [
+      rawCheck({ key: "2factor", label: "SMS OTP (2factor.in)", status: "unknown" }),
+      rawCheck({ key: "msg91_widget", label: "MSG91 Widget Verify (Login)", status: "unknown" }),
+    ],
+  });
+  const otp = rawCheck({
+    service: "admin-api",
+    key: "otp",
+    label: "OTP Delivery",
+    status: "unknown",
+    flows: [rawCheck({ key: "email", label: "Email OTP", status: "unknown" })],
+  });
+  const callingSystem = rawCheck({
+    service: "admin-api",
+    key: "calling_system",
+    label: "Calling System",
+    status: "pending_setup",
+    note: "Only a CRM agent-attribution endpoint exists (CallingAgentController.js) — no actual telephony/dialer integration to monitor.",
+    flows: [],
+  });
+  const result = normalizeServiceHealth(buildRaw([wati, sms, otp, callingSystem]), SPORTSBOOK_STUB);
+  const comms = result.categories.find((c) => c.key === "comms")!;
+
+  assert.equal(comms.realCoverage, "partial");
+  assert.deepEqual(comms.checks.map((c) => c.key), ["wati_messaging", "sms", "otp", "calling_system"]);
+
+  const smsGroup = comms.checks.find((c) => c.key === "sms") as NormalizedGroup;
+  assert.equal(smsGroup.kind, "group");
+  assert.equal(smsGroup.children.length, 2);
+
+  const otpGroup = comms.checks.find((c) => c.key === "otp") as NormalizedGroup;
+  assert.equal(otpGroup.children.length, 1);
+
+  const callingSystemNode = comms.checks.find((c) => c.key === "calling_system") as NormalizedLeaf;
+  assert.equal(
+    callingSystemNode.sourceNote,
+    "Only a CRM agent-attribution endpoint exists (CallingAgentController.js) — no actual telephony/dialer integration to monitor."
+  );
 });
 
 test("Other: business_flow_deposit renders steps[] in original order, never sorted", () => {
@@ -388,6 +634,32 @@ test("Other: sports_bet under the wrong service is not picked up (composite look
   const result = normalizeServiceHealth(buildRaw([decoy]), SPORTSBOOK_STUB);
   const other = result.categories.find((c) => c.key === "other")!;
   assert.equal(other.checks.find((c) => c.key === "sports_bet"), undefined);
+});
+
+test("Other: content_creator_system appears as a pending_setup leaf alongside business_flow_deposit and sports_bet, with its real sourceNote", () => {
+  const deposit = rawCheck({ key: "business_flow_deposit", status: "unknown", steps: [rawCheck({ status: "unknown" })] });
+  const sportsBet = rawCheck({ service: "sports_bet", key: "sports_bet", method: "n/a", status: "down" });
+  const contentCreator = rawCheck({
+    service: "admin-api",
+    key: "content_creator_system",
+    label: "Content Creator System",
+    status: "pending_setup",
+    note: "No content-creator service or endpoint exists in code — only a passive attribution field on user records.",
+    flows: [],
+  });
+  const result = normalizeServiceHealth(buildRaw([deposit, sportsBet, contentCreator]), SPORTSBOOK_STUB);
+  const other = result.categories.find((c) => c.key === "other")!;
+
+  assert.deepEqual(
+    other.checks.map((c) => c.key),
+    ["business_flow_deposit", "sports_bet", "content_creator_system"]
+  );
+  const node = other.checks.find((c) => c.key === "content_creator_system") as NormalizedLeaf;
+  assert.equal(node.status, "pending_setup");
+  assert.equal(
+    node.sourceNote,
+    "No content-creator service or endpoint exists in code — only a passive attribution field on user records."
+  );
 });
 
 // --- Composite identity (service+key) ------------------------------
@@ -485,6 +757,34 @@ test("toLeaf: no sourceNote when the raw entry carries no note (the common case)
   const raw = rawCheck({ key: "pay777", status: "delayed" });
   const leaf = toLeaf(raw);
   assert.equal(leaf.sourceNote, undefined);
+});
+
+// Regression: `flows: []` (an empty array) is a real shape (confirmed
+// live 2026-09-23 on internal_back_office and all 5 pending_setup
+// entries) -- toNode used to treat any truthy `entry.flows`, including an
+// empty array, as "this is a group," discarding the entry's own real
+// status (e.g. "pending_setup") in favor of aggregateStatus([]) ==
+// "unknown" on a zero-child group. Found while wiring kyc_shifty_pro/
+// calling_system in via toNode for the first time.
+test("toNode: an entry with flows: [] (empty, not absent) is a leaf, not a zero-child group -- real status preserved", () => {
+  const raw = rawCheck({
+    service: "admin-api",
+    key: "kyc_shifty_pro",
+    label: "KYC (Shifty Pro)",
+    status: "pending_setup",
+    note: "Future integration per requirements — no Shifty Pro (or any KYC provider) integration exists in code yet.",
+    flows: [],
+  });
+  const node = toNode(raw, "2026-09-23T05:56:45.698Z");
+  assert.equal(node.kind, "leaf", "not wrapped in a group just because flows is present, even though it's empty");
+  assert.equal(node.status, "pending_setup", "not silently downgraded to 'unknown' via an empty-children aggregateStatus");
+});
+
+test("toNode: an entry with steps: [] (empty, not absent) is a leaf too, same as flows", () => {
+  const raw = rawCheck({ key: "some_entry", status: "ok", steps: [] });
+  const node = toNode(raw, "2026-09-23T05:56:45.698Z");
+  assert.equal(node.kind, "leaf");
+  assert.equal(node.status, "ok");
 });
 
 test("Other: our own socket investigation note and a hypothetical raw sourceNote never collide (both can coexist)", () => {

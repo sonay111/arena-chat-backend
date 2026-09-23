@@ -76,6 +76,36 @@ function describeIssue(children: NormalizedNode[], status: StatusValue, checkedA
   return `${leaf.label} ${status} — ${ageText}`;
 }
 
+// The shared group-rollup: status aggregation + lastSuccessAt/
+// lastFailureAt rollup + issueDetail, from any already-normalized
+// children -- not tied to a single raw entry's flows[]/steps[]. Used by
+// toGroup below (the raw-entry case: payment gateways, CRM,
+// notifications, business_flow_deposit) AND by buildSportsbook's "Our
+// Connection"/"Provider Health" rows, which each combine children from
+// different sources (our own internal signals; a curated list of raw
+// entries) rather than one entry's own flows[]/steps[] array.
+function buildGroup(
+  key: string,
+  label: string,
+  children: NormalizedNode[],
+  checkedAt: string,
+  sourceNote?: string
+): NormalizedGroup {
+  const status = aggregateStatus(children.map((c) => c.status));
+  return {
+    kind: "group",
+    key,
+    label,
+    status,
+    lastSuccessAt: latestTimestamp(children, "lastSuccessAt"),
+    lastFailureAt: latestTimestamp(children, "lastFailureAt"),
+    responseTimeMs: null,
+    issueDetail: describeIssue(children, status, checkedAt),
+    children,
+    ...(sourceNote ? { sourceNote } : {}),
+  };
+}
+
 // Used for both flows[] (payment gateways, notifications) and steps[]
 // (the deposit business flow) -- same shape, different field name on the
 // raw entry, same aggregation rule either way. checkedAt is Satyam's own
@@ -83,29 +113,23 @@ function describeIssue(children: NormalizedNode[], status: StatusValue, checkedA
 // every child's own age is measured against, so the issue detail's "last
 // succeeded Nd Nh ago" stays consistent with that.
 export function toGroup(entry: RawEntry, children: RawCheck[], checkedAt: string): NormalizedGroup {
-  const normalizedChildren = children.map(toLeaf);
-  const status = aggregateStatus(normalizedChildren.map((c) => c.status));
-  return {
-    kind: "group",
-    key: entry.key,
-    label: entry.label,
-    status,
-    lastSuccessAt: latestTimestamp(normalizedChildren, "lastSuccessAt"),
-    lastFailureAt: latestTimestamp(normalizedChildren, "lastFailureAt"),
-    responseTimeMs: null,
-    issueDetail: describeIssue(normalizedChildren, status, checkedAt),
-    children: normalizedChildren,
-    ...(entry.note ? { sourceNote: entry.note } : {}),
-  };
+  return buildGroup(entry.key, entry.label, children.map(toLeaf), checkedAt, entry.note);
 }
 
 // A group's own children array is never re-sorted here or anywhere in
 // this module -- callers pass entry.flows/entry.steps through in the
 // order the CRM returned them, which matters most for business_flow_deposit
 // (an ordered causal chain, not an unordered set of checks).
-function toNode(entry: RawEntry, checkedAt: string): NormalizedNode {
-  if (entry.flows) return toGroup(entry, entry.flows, checkedAt);
-  if (entry.steps) return toGroup(entry, entry.steps, checkedAt);
+//
+// `.length > 0`, not just truthiness -- confirmed live 2026-09-23 that 6
+// real "simple" entries (internal_back_office and all 5 pending_setup
+// entries) carry `flows: []`, an empty array, not an absent field. A bare
+// `if (entry.flows)` would wrongly wrap those in a zero-child group
+// (status "unknown" via aggregateStatus([]), silently discarding the
+// entry's own real status, e.g. "pending_setup").
+export function toNode(entry: RawEntry, checkedAt: string): NormalizedNode {
+  if (entry.flows && entry.flows.length > 0) return toGroup(entry, entry.flows, checkedAt);
+  if (entry.steps && entry.steps.length > 0) return toGroup(entry, entry.steps, checkedAt);
   return toLeaf(entry);
 }
 
@@ -214,14 +238,72 @@ function buildCasino(data: RawEntry[]): NormalizedCategory {
   };
 }
 
-function notIntegratedCategory(key: string, label: string): NormalizedCategory {
+// Investigated 2026-09-23: both frogo_risk_signal entries are currently
+// all-null (never fired), so there's no live timestamp/responseTimeMs to
+// compare the way the SportRadar Producer Connection duplicate was
+// resolved. But their labels genuinely differ ("Frogo Risk Scoring" vs
+// "Frogo Risk Scoring (Bet Settlement)") and so does slowMs (5000 vs
+// null, a real config difference, not just two empty records) -- unlike
+// the SportRadar case, this points to two distinct real checks (payment-
+// flow risk scoring vs bet-settlement risk scoring) that happen to share
+// a key, not the same check reported twice. Per the "identical -> once,
+// different -> both, clearly labeled" rule: both are included here.
+function buildKycRisk(data: RawEntry[], checkedAt: string): NormalizedCategory {
+  const checks: NormalizedNode[] = [];
+
+  const frogoPaymentSignal = findEntry(data, "payment", "frogo_risk_signal");
+  if (frogoPaymentSignal) checks.push(toNode(frogoPaymentSignal, checkedAt));
+
+  const frogoSocketSignal = findEntry(data, "socket", "frogo_risk_signal");
+  if (frogoSocketSignal) checks.push(toNode(frogoSocketSignal, checkedAt));
+
+  const frogoIntelligence = findEntry(data, "admin-api", "frogo");
+  if (frogoIntelligence) checks.push(toNode(frogoIntelligence, checkedAt));
+
+  const kycShiftyPro = findEntry(data, "admin-api", "kyc_shifty_pro");
+  if (kycShiftyPro) checks.push(toNode(kycShiftyPro, checkedAt));
+
+  const hasAnyReal = checks.length > 0;
   return {
-    key,
-    label,
-    status: "not_integrated",
-    realCoverage: "none",
-    note: "Nothing real exists for this category yet.",
-    checks: [],
+    key: "kyc_risk",
+    label: "KYC & Risk",
+    status: hasAnyReal ? aggregateStatus(checks.map(statusOf)) : "not_integrated",
+    realCoverage: hasAnyReal ? "partial" : "none",
+    note: hasAnyReal
+      ? "The 3 Frogo risk-scoring checks are real (currently unmonitored/unknown); actual KYC identity verification (Shifty Pro) has no real integration yet -- pending_setup only."
+      : "Nothing real exists for this category yet.",
+    checks,
+  };
+}
+
+// wati_messaging, sms, and otp are all real; calling_system is
+// pending_setup (a CRM agent-attribution endpoint exists, but no actual
+// telephony/dialer integration -- see its own sourceNote).
+function buildComms(data: RawEntry[], checkedAt: string): NormalizedCategory {
+  const checks: NormalizedNode[] = [];
+
+  const watiMessaging = findEntry(data, "payment", "wati_messaging");
+  if (watiMessaging) checks.push(toNode(watiMessaging, checkedAt));
+
+  const sms = findEntry(data, "admin-api", "sms");
+  if (sms) checks.push(toNode(sms, checkedAt));
+
+  const otp = findEntry(data, "admin-api", "otp");
+  if (otp) checks.push(toNode(otp, checkedAt));
+
+  const callingSystem = findEntry(data, "admin-api", "calling_system");
+  if (callingSystem) checks.push(toNode(callingSystem, checkedAt));
+
+  const hasAnyReal = checks.length > 0;
+  return {
+    key: "comms",
+    label: "Comms",
+    status: hasAnyReal ? aggregateStatus(checks.map(statusOf)) : "not_integrated",
+    realCoverage: hasAnyReal ? "partial" : "none",
+    note: hasAnyReal
+      ? "Wati (WhatsApp), SMS, and OTP delivery are real; the Calling System has no real telephony integration yet -- pending_setup only."
+      : "Nothing real exists for this category yet.",
+    checks,
   };
 }
 
@@ -265,6 +347,11 @@ function buildOther(data: RawEntry[], checkedAt: string): NormalizedCategory {
     });
   }
 
+  const contentCreatorSystem = findEntry(data, "admin-api", "content_creator_system");
+  if (contentCreatorSystem) {
+    checks.push(toNode(contentCreatorSystem, checkedAt));
+  }
+
   return {
     key: "other",
     label: "Other",
@@ -274,9 +361,69 @@ function buildOther(data: RawEntry[], checkedAt: string): NormalizedCategory {
   };
 }
 
+// The 6 real checks that make up "Provider Health" -- all genuinely
+// distinct real checks except sportsradar_producer_connection, which
+// exists under both service "socket" and service "odds_streamer" (same
+// underlying check, confirmed live 2026-09-23 -- see RawEntry's comment
+// in types.ts). Only the odds_streamer instance is included here: a
+// "provider" framing groups checks about the upstream data source itself,
+// and odds_streamer is the more relevant grouping for that than socket
+// (our own inbound transport, already covered by "Our Connection").
+const PROVIDER_HEALTH_ENTRIES: Array<{ service: string; key: string }> = [
+  { service: "socket", key: "socket_connections" },
+  { service: "socket", key: "sr_bet_settlement" },
+  { service: "socket", key: "sr_bet_settlement_processing" },
+  { service: "socket", key: "sr_tier1_settlement_sla" },
+  { service: "odds_streamer", key: "partner_odds_feed_relay" },
+  { service: "odds_streamer", key: "sportsradar_producer_connection" },
+];
+
+// Two separate, visible rows rather than one merged status: "Our
+// Connection" is exactly today's existing derivation (ourConnectionSource
+// is whatever computeSportsbookHealth in sportsbook.ts already built --
+// untouched, just re-wrapped into a named group here instead of being
+// used as the whole category), and "Provider Health" is new -- 6 real
+// checks from /service-health that this endpoint doesn't otherwise cover
+// under any of our other 7 categories.
+// Pending-setup SportRadar entries -- pushed as flat top-level leaves,
+// deliberately NOT inside Provider Health's children, so they never mix
+// with (or drag down the rollup of) the 6 real checks there. "Clearly
+// separate" per the 2026-09-23 request, same flat-mixing style Other/
+// KYC & Risk/Comms use for their own real+pending_setup entries.
+const SPORTSRADAR_PENDING_ENTRIES: Array<{ service: string; key: string }> = [
+  { service: "admin-api", key: "sportsradar_live_tracker" },
+  { service: "admin-api", key: "sportsradar_back_office" },
+];
+
+function buildSportsbook(
+  data: RawEntry[],
+  checkedAt: string,
+  ourConnectionSource: NormalizedCategory
+): NormalizedCategory {
+  const ourConnection = buildGroup("our_connection", "Our Connection", ourConnectionSource.checks, checkedAt);
+
+  const providerChecks = PROVIDER_HEALTH_ENTRIES.map(({ service, key }) => findEntry(data, service, key))
+    .filter((entry): entry is RawEntry => entry !== undefined)
+    .map((entry) => toNode(entry, checkedAt));
+  const providerHealth = buildGroup("provider_health", "Provider Health", providerChecks, checkedAt);
+
+  const pendingChecks = SPORTSRADAR_PENDING_ENTRIES.map(({ service, key }) => findEntry(data, service, key))
+    .filter((entry): entry is RawEntry => entry !== undefined)
+    .map((entry) => toNode(entry, checkedAt));
+
+  const checks = [ourConnection, providerHealth, ...pendingChecks];
+  return {
+    key: "sportsbook",
+    label: "Sportsbook",
+    status: aggregateStatus(checks.map(statusOf)),
+    realCoverage: "full",
+    checks,
+  };
+}
+
 export function normalizeServiceHealth(
   raw: RawServiceHealthResponse,
-  sportsbook: NormalizedCategory
+  ourConnectionSource: NormalizedCategory
 ): NormalizedServiceHealth {
   return {
     checkedAt: raw.checkedAt,
@@ -285,9 +432,9 @@ export function normalizeServiceHealth(
       buildCrm(raw.data, raw.checkedAt),
       buildNotifications(raw.data, raw.checkedAt),
       buildCasino(raw.data),
-      sportsbook,
-      notIntegratedCategory("kyc_risk", "KYC & Risk"),
-      notIntegratedCategory("comms", "Comms"),
+      buildSportsbook(raw.data, raw.checkedAt, ourConnectionSource),
+      buildKycRisk(raw.data, raw.checkedAt),
+      buildComms(raw.data, raw.checkedAt),
       buildOther(raw.data, raw.checkedAt),
     ],
   };

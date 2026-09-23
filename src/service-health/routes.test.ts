@@ -97,7 +97,7 @@ test("GET /service-health returns all 8 categories with checkedAt passed through
   );
 });
 
-test("GET /service-health: casino is real (ok, partial coverage), sportsbook is the injected stub untouched", async () => {
+test("GET /service-health: casino is real (ok, partial coverage), sportsbook wraps the injected stub as 'Our Connection' plus a 'Provider Health' row", async () => {
   const res = await fetch(`${baseUrl}/service-health`);
   const body = await res.json();
 
@@ -106,7 +106,12 @@ test("GET /service-health: casino is real (ok, partial coverage), sportsbook is 
   assert.equal(casino.realCoverage, "partial");
 
   const sportsbook = body.categories.find((c: NormalizedCategory) => c.key === "sportsbook");
-  assert.deepEqual(sportsbook, stubSportsbook);
+  assert.deepEqual(
+    sportsbook.checks.map((c: { key: string }) => c.key),
+    ["our_connection", "provider_health"]
+  );
+  const ourConnection = sportsbook.checks.find((c: { key: string }) => c.key === "our_connection");
+  assert.deepEqual(ourConnection.children, stubSportsbook.checks, "the injected stub's own checks pass through untouched");
 });
 
 test("GET /service-health: a fetchRaw failure returns 500 rather than a partial/broken body", async () => {
