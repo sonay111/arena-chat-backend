@@ -510,3 +510,108 @@ test("ordering guard: a brand-new payment always accepts its first event regardl
   await cleanupEventId(eventId);
   await cleanupPayment(paymentId);
 });
+
+// reason (added 2026-09-23): admin-typed reason on rejection, provider
+// error message on gateway failure, null otherwise. Real example that
+// motivated this: withdrawal 6ab39acc0ec99d159c970bb7 was rejected once
+// with no reason field at all (evt_6c023ebe22e41454, 09:41:08.919Z), then
+// the platform re-fired the SAME rejected status with reason populated
+// (evt_81b6fa875f43b87b, 11:22:16.294Z, reason: "no payslip") -- a
+// same-status-but-genuinely-newer event, which the ordering guard must
+// still accept (its WHERE clause compares timestamps, not whether status
+// changed). Real timestamps/reason text reused here; payment id and
+// eventIds are this test's own synthetic ones, not the real production
+// rows, so cleanup never touches real data.
+
+test("reason: the real re-fired rejection example -- a same-status-but-newer event still updates reason", async () => {
+  const paymentId = "test_payment_reason_refired_rejection";
+  const firstEventId = "test_evt_reason_refired_first";
+  const secondEventId = "test_evt_reason_refired_second";
+
+  const firstRejection = {
+    event: "withdrawal.rejected",
+    eventId: firstEventId,
+    timestamp: "2026-09-23T09:41:08.919Z", // real timestamp from the live example
+    data: { _id: paymentId, userId: "TEST_PLAYER_REASON_REFIRED", paymentType: "withdrawal", amount: 9, currency: "usdttrc20", status: "rejected" },
+  };
+  const secondRejection = {
+    event: "withdrawal.rejected",
+    eventId: secondEventId,
+    timestamp: "2026-09-23T11:22:16.294Z", // real timestamp, genuinely newer
+    data: { _id: paymentId, userId: "TEST_PLAYER_REASON_REFIRED", paymentType: "withdrawal", amount: 9, currency: "usdttrc20", status: "rejected", reason: "no payslip" },
+  };
+
+  const first = await post("/withdrawals", JSON.stringify(firstRejection), sign(JSON.stringify(firstRejection)));
+  assert.equal(first.status, 200);
+
+  let payment = await pool.query("SELECT status, reason FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rows[0].status, "rejected");
+  assert.equal(payment.rows[0].reason, null, "no reason field at all on the first event -- stays null, not an error");
+
+  const second = await post("/withdrawals", JSON.stringify(secondRejection), sign(JSON.stringify(secondRejection)));
+  assert.equal(second.status, 200);
+
+  payment = await pool.query("SELECT status, reason, event_timestamp FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rows[0].status, "rejected", "status itself is unchanged (rejected -> rejected)");
+  assert.equal(payment.rows[0].reason, "no payslip", "but reason is now populated -- the ordering guard compares timestamps, not whether any field's value actually changed");
+  assert.equal(payment.rows[0].event_timestamp.toISOString(), "2026-09-23T11:22:16.294Z");
+
+  await cleanupEventId(firstEventId);
+  await cleanupEventId(secondEventId);
+  await cleanupPayment(paymentId);
+});
+
+test("reason: an older event must not overwrite a newer reason, same ordering guard as status", async () => {
+  const paymentId = "test_payment_reason_ordering_guard";
+  const newerEventId = "test_evt_reason_ordering_guard_newer";
+  const olderEventId = "test_evt_reason_ordering_guard_older";
+
+  const newerEnvelope = {
+    event: "withdrawal.rejected",
+    eventId: newerEventId,
+    timestamp: "2026-09-23T11:22:16.294Z",
+    data: { _id: paymentId, userId: "TEST_PLAYER_REASON_ORDERING", paymentType: "withdrawal", amount: 9, currency: "usdttrc20", status: "rejected", reason: "no payslip" },
+  };
+  const olderEnvelope = {
+    event: "withdrawal.rejected",
+    eventId: olderEventId,
+    timestamp: "2026-09-23T09:41:08.919Z",
+    data: { _id: paymentId, userId: "TEST_PLAYER_REASON_ORDERING", paymentType: "withdrawal", amount: 9, currency: "usdttrc20", status: "rejected", reason: "wrong wallet id" },
+  };
+
+  // Newer event processed first...
+  const first = await post("/withdrawals", JSON.stringify(newerEnvelope), sign(JSON.stringify(newerEnvelope)));
+  assert.equal(first.status, 200);
+  // ...older event arrives second, simulating a late/out-of-order write.
+  const second = await post("/withdrawals", JSON.stringify(olderEnvelope), sign(JSON.stringify(olderEnvelope)));
+  assert.equal(second.status, 200, "still accepted (200), just doesn't win the upsert");
+
+  const payment = await pool.query("SELECT reason FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rows[0].reason, "no payslip", "the older event's reason must not overwrite the newer one");
+
+  await cleanupEventId(newerEventId);
+  await cleanupEventId(olderEventId);
+  await cleanupPayment(paymentId);
+});
+
+test("reason: absent entirely on an ordinary event (no reason key at all) -- stays null, does not error", async () => {
+  const paymentId = "test_payment_reason_absent";
+  const eventId = "test_evt_reason_absent";
+  const envelope = {
+    event: "withdrawal.completed",
+    eventId,
+    timestamp: "2026-09-23T11:10:17.643Z",
+    data: { _id: paymentId, userId: "TEST_PLAYER_REASON_ABSENT", paymentType: "withdrawal", amount: 100, currency: "INR", status: "completed" },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status } = await post("/withdrawals", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+
+  const payment = await pool.query("SELECT status, reason FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rows[0].status, "completed");
+  assert.equal(payment.rows[0].reason, null);
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
+});

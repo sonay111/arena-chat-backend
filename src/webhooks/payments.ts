@@ -75,9 +75,9 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
          id, user_id, payment_type, type, payment_method, reference_no, amount,
          currency, status, payment_status, approval_status, screenshot, is_reapproved,
          payment_id, ip, is_chargedback, is_wegered, gateway,
-         network_fee, payment_data, bank_id, remark, created_at, updated_at, event_timestamp
+         network_fee, payment_data, bank_id, remark, created_at, updated_at, event_timestamp, reason
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        ON CONFLICT (id) DO UPDATE SET
          user_id         = EXCLUDED.user_id,
          payment_type    = EXCLUDED.payment_type,
@@ -101,7 +101,8 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
          bank_id         = EXCLUDED.bank_id,
          remark          = EXCLUDED.remark,
          updated_at      = EXCLUDED.updated_at,
-         event_timestamp = EXCLUDED.event_timestamp
+         event_timestamp = EXCLUDED.event_timestamp,
+         reason          = EXCLUDED.reason
        WHERE payments.event_timestamp IS NULL OR EXCLUDED.event_timestamp > payments.event_timestamp`,
       [
         data._id,
@@ -129,6 +130,11 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
         createdAt,
         data.updatedAt ?? null,
         eventTimestamp,
+        // Confirmed real 2026-09-23: admin-typed reason on rejection,
+        // provider error message on gateway failure, null otherwise --
+        // absent entirely on events that predate this field, so ?? null
+        // covers both "field not sent yet" and "genuinely null" the same way.
+        data.reason ?? null,
       ]
     );
 

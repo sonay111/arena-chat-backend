@@ -132,8 +132,8 @@ before(async () => {
   );
 
   await pool.query(
-    `INSERT INTO payments (id, user_id, payment_type, status, amount, currency, created_at, updated_at)
-     VALUES ($1, $2, 'withdrawal', 'rejected', 100, 'INR', now() - interval '15 minutes', now())`,
+    `INSERT INTO payments (id, user_id, payment_type, status, reason, amount, currency, created_at, updated_at)
+     VALUES ($1, $2, 'withdrawal', 'rejected', 'no payslip', 100, 'INR', now() - interval '15 minutes', now())`,
     [justResolvedPaymentId, justResolvedUserId]
   );
   await pool.query(
@@ -208,9 +208,10 @@ test("GET /alerts/withdrawal-delays: a still-pending withdrawal appears", async 
   const alert = body.alerts.find((a: any) => a.paymentId === stillPendingPaymentId);
   assert.ok(alert, "expected the still-pending withdrawal to appear");
   assert.equal(alert.status, "pending");
+  assert.equal(alert.reason, null, "no reason on a still-pending withdrawal");
 });
 
-test("GET /alerts/withdrawal-delays: a withdrawal resolved 5 minutes ago still appears, with its new status", async () => {
+test("GET /alerts/withdrawal-delays: a withdrawal resolved 5 minutes ago still appears, with its new status and reason", async () => {
   const res = await fetch(`${baseUrl}/alerts/withdrawal-delays`);
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -218,6 +219,7 @@ test("GET /alerts/withdrawal-delays: a withdrawal resolved 5 minutes ago still a
   const alert = body.alerts.find((a: any) => a.paymentId === justResolvedPaymentId);
   assert.ok(alert, "expected the just-resolved withdrawal to still appear within the 1-hour window");
   assert.equal(alert.status, "rejected");
+  assert.equal(alert.reason, "no payslip");
 });
 
 test("GET /alerts/withdrawal-delays: statusChangedAt reflects when the resolving event arrived, not createdAt", async () => {

@@ -178,6 +178,14 @@ ALTER TABLE payments ADD COLUMN IF NOT EXISTS flagged_delayed BOOLEAN NOT NULL D
 -- newer than whatever's already stored here.
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
 
+-- Confirmed real 2026-09-23: Satyam's withdrawal webhooks now carry a
+-- reason field (admin-typed reason on rejection, provider error message
+-- on gateway failure, null otherwise) on initiated/completed/rejected/
+-- failed/cancelled. Populated from data.reason in the same upsert as
+-- status, guarded by the same event_timestamp check above -- a stale
+-- event must never overwrite a newer reason, same principle as status.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS reason TEXT;
+
 -- Partial index: only covers withdrawals the detector still needs to look
 -- at (unflagged). Shrinks as withdrawals get flagged instead of growing
 -- with the whole payments table.

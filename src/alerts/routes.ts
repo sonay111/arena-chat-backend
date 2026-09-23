@@ -43,7 +43,7 @@ alertsRouter.get("/alerts/withdrawal-delays", async (req: Request, res: Response
 
   try {
     const { rows } = await pool.query(
-      `SELECT p.id AS payment_id, p.user_id, p.amount, p.currency, p.status,
+      `SELECT p.id AS payment_id, p.user_id, p.amount, p.currency, p.status, p.reason,
               p.created_at, p.updated_at, a.player_context, a.flagged_at,
               le.last_event_at
        FROM withdrawal_delay_alerts a
@@ -70,6 +70,10 @@ alertsRouter.get("/alerts/withdrawal-delays", async (req: Request, res: Response
       amount: row.amount,
       currency: row.currency,
       status: row.status,
+      // Admin-typed reason on rejection, provider error message on gateway
+      // failure, null otherwise -- also null on every withdrawal predating
+      // this field (confirmed real 2026-09-23, see src/webhooks/payments.ts).
+      reason: row.reason,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       flaggedAt: row.flagged_at,
