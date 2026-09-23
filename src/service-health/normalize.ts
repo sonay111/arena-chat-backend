@@ -233,6 +233,16 @@ function buildOther(data: RawEntry[], checkedAt: string): NormalizedCategory {
     checks.push(toGroup(depositFlow, depositFlow.steps, checkedAt));
   }
 
+  // Real, currently-failing check (confirmed live 2026-09-23: status
+  // down, method "n/a", "Request failed with status code 403") -- no
+  // investigation done on this one yet (unlike the old socket entry
+  // below), so no annotation added here beyond what's real. Plain toLeaf,
+  // same composite (service, key) lookup as everything else.
+  const sportsBetEntry = findEntry(data, "sports_bet", "sports_bet");
+  if (sportsBetEntry) {
+    checks.push(toLeaf(sportsBetEntry));
+  }
+
   // Synthetic-entry handling: method "n/a" marks a check against a
   // service we can't reach in the normal request/response sense (as
   // opposed to a real request that came back unhealthy) -- passed through

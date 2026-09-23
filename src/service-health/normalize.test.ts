@@ -353,6 +353,43 @@ test("Other: category status is worst-of (deposit flow unknown, socket down) -> 
   assert.equal(other.status, "down");
 });
 
+test("Other: maps the real sports_bet entry (currently down, 403) as a plain leaf, no fabricated annotation", () => {
+  const sportsBet = rawCheck({
+    service: "sports_bet",
+    key: "sports_bet",
+    label: "Sports Bet Service",
+    method: "n/a",
+    status: "down",
+    lastFailureAt: "2026-09-23T04:39:56.152Z",
+    lastError: "Request failed with status code 403",
+  });
+  const result = normalizeServiceHealth(buildRaw([sportsBet]), SPORTSBOOK_STUB);
+  const other = result.categories.find((c) => c.key === "other")!;
+  const node = other.checks.find((c) => c.key === "sports_bet") as NormalizedLeaf;
+  assert.ok(node, "sports_bet is no longer invisible in the Other category");
+  assert.equal(node.kind, "leaf");
+  assert.equal(node.method, "n/a");
+  assert.equal(node.status, "down");
+  assert.equal(node.lastError, "Request failed with status code 403");
+  assert.equal(node.note, undefined, "unlike the old socket entry, no investigation has been done on this one -- nothing fabricated");
+});
+
+test("Other: category status reflects sports_bet being down, even alongside an unrelated unknown business flow", () => {
+  const deposit = rawCheck({ key: "business_flow_deposit", status: "unknown", steps: [rawCheck({ status: "unknown" })] });
+  const sportsBet = rawCheck({ service: "sports_bet", key: "sports_bet", method: "n/a", status: "down" });
+  const result = normalizeServiceHealth(buildRaw([deposit, sportsBet]), SPORTSBOOK_STUB);
+  const other = result.categories.find((c) => c.key === "other")!;
+  assert.equal(other.status, "down");
+  assert.equal(other.checks.length, 2);
+});
+
+test("Other: sports_bet under the wrong service is not picked up (composite lookup, same as every other entry)", () => {
+  const decoy = rawCheck({ service: "some_other_service", key: "sports_bet", status: "down" });
+  const result = normalizeServiceHealth(buildRaw([decoy]), SPORTSBOOK_STUB);
+  const other = result.categories.find((c) => c.key === "other")!;
+  assert.equal(other.checks.find((c) => c.key === "sports_bet"), undefined);
+});
+
 // --- Composite identity (service+key) ------------------------------
 //
 // Real duplicate-key examples confirmed live 2026-09-23 against the
