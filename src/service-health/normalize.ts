@@ -11,7 +11,7 @@ import type {
 } from "./types.js";
 import { aggregateStatus } from "./aggregate.js";
 
-function toLeaf(raw: RawCheck): NormalizedLeaf {
+export function toLeaf(raw: RawCheck): NormalizedLeaf {
   return {
     kind: "leaf",
     key: raw.key,
@@ -22,6 +22,7 @@ function toLeaf(raw: RawCheck): NormalizedLeaf {
     lastFailureAt: raw.lastFailureAt,
     lastError: raw.lastError,
     responseTimeMs: raw.responseTimeMs,
+    ...(raw.note ? { sourceNote: raw.note } : {}),
   };
 }
 
@@ -81,7 +82,7 @@ function describeIssue(children: NormalizedNode[], status: StatusValue, checkedA
 // "as of" timestamp for this response, not our wall clock -- it's what
 // every child's own age is measured against, so the issue detail's "last
 // succeeded Nd Nh ago" stays consistent with that.
-function toGroup(entry: RawEntry, children: RawCheck[], checkedAt: string): NormalizedGroup {
+export function toGroup(entry: RawEntry, children: RawCheck[], checkedAt: string): NormalizedGroup {
   const normalizedChildren = children.map(toLeaf);
   const status = aggregateStatus(normalizedChildren.map((c) => c.status));
   return {
@@ -94,6 +95,7 @@ function toGroup(entry: RawEntry, children: RawCheck[], checkedAt: string): Norm
     responseTimeMs: null,
     issueDetail: describeIssue(normalizedChildren, status, checkedAt),
     children: normalizedChildren,
+    ...(entry.note ? { sourceNote: entry.note } : {}),
   };
 }
 
@@ -107,8 +109,14 @@ function toNode(entry: RawEntry, checkedAt: string): NormalizedNode {
   return toLeaf(entry);
 }
 
-function findByKey(data: RawEntry[], key: string): RawEntry | undefined {
-  return data.find((entry) => entry.key === key);
+// `key` alone is not a unique identity in this API -- see RawEntry's
+// comment in types.ts for the two confirmed real collisions
+// (sportsradar_producer_connection across service "socket"/"odds_streamer",
+// frogo_risk_signal across service "payment"/"socket" with different
+// labels). Every lookup in this module goes through here, service+key
+// together, so two distinct real checks can never silently collide.
+export function findEntry(data: RawEntry[], service: string, key: string): RawEntry | undefined {
+  return data.find((entry) => entry.service === service && entry.key === key);
 }
 
 function statusOf(node: NormalizedNode): NormalizedNode["status"] {
@@ -120,21 +128,23 @@ function statusOf(node: NormalizedNode): NormalizedNode["status"] {
 // gateways) as a 9th entry: it's payment-domain (deposit slip
 // verification) but doesn't fit CRM/Notifications/Casino/Other, so it
 // rides along here rather than being silently dropped (confirmed live
-// 2026-09-22 that the original mapping omitted it entirely).
-const PAYMENT_KEYS = [
-  "pay777",
-  "paytru",
-  "paybitra",
-  "dypaytech",
-  "rolezpay",
-  "payelu",
-  "digiceylon",
-  "hero",
-  "ocr_deposit_slip",
+// 2026-09-22 that the original mapping omitted it entirely). All 9 are
+// service "payment" -- named explicitly per-entry (not a bare key list)
+// so this reads the same composite-identity way as every other lookup.
+const PAYMENT_ENTRIES: Array<{ service: string; key: string }> = [
+  { service: "payment", key: "pay777" },
+  { service: "payment", key: "paytru" },
+  { service: "payment", key: "paybitra" },
+  { service: "payment", key: "dypaytech" },
+  { service: "payment", key: "rolezpay" },
+  { service: "payment", key: "payelu" },
+  { service: "payment", key: "digiceylon" },
+  { service: "payment", key: "hero" },
+  { service: "payment", key: "ocr_deposit_slip" },
 ];
 
 function buildPayments(data: RawEntry[], checkedAt: string): NormalizedCategory {
-  const checks = PAYMENT_KEYS.map((key) => findByKey(data, key))
+  const checks = PAYMENT_ENTRIES.map(({ service, key }) => findEntry(data, service, key))
     .filter((entry): entry is RawEntry => entry !== undefined)
     .map((entry) => toNode(entry, checkedAt));
 
@@ -153,7 +163,7 @@ function buildPayments(data: RawEntry[], checkedAt: string): NormalizedCategory 
 // which meant no single place to see its own rolled-up lastSuccessAt/
 // issueDetail without looking at all 4 flows individually.
 function buildCrm(data: RawEntry[], checkedAt: string): NormalizedCategory {
-  const entry = findByKey(data, "crm");
+  const entry = findEntry(data, "admin-api", "crm");
   const checks = entry?.flows ? [toGroup(entry, entry.flows, checkedAt)] : [];
 
   return {
@@ -167,11 +177,14 @@ function buildCrm(data: RawEntry[], checkedAt: string): NormalizedCategory {
 
 // Two distinct real sources under the notifications category -- kept as
 // two named groups (not flattened into one flow list) so a caller can
-// still tell OneSignal apart from in-app delivery.
-const NOTIFICATION_SOURCE_KEYS = ["onesignal", "notifications"];
+// still tell OneSignal apart from in-app delivery. Both service "admin-api".
+const NOTIFICATION_SOURCE_ENTRIES: Array<{ service: string; key: string }> = [
+  { service: "admin-api", key: "onesignal" },
+  { service: "admin-api", key: "notifications" },
+];
 
 function buildNotifications(data: RawEntry[], checkedAt: string): NormalizedCategory {
-  const checks = NOTIFICATION_SOURCE_KEYS.map((key) => findByKey(data, key))
+  const checks = NOTIFICATION_SOURCE_ENTRIES.map(({ service, key }) => findEntry(data, service, key))
     .filter((entry): entry is RawEntry => entry !== undefined)
     .map((entry) => toNode(entry, checkedAt));
 
@@ -180,13 +193,13 @@ function buildNotifications(data: RawEntry[], checkedAt: string): NormalizedCate
     label: "Notifications",
     status: checks.length > 0 ? aggregateStatus(checks.map(statusOf)) : "not_integrated",
     realCoverage:
-      checks.length === NOTIFICATION_SOURCE_KEYS.length ? "full" : checks.length > 0 ? "partial" : "none",
+      checks.length === NOTIFICATION_SOURCE_ENTRIES.length ? "full" : checks.length > 0 ? "partial" : "none",
     checks,
   };
 }
 
 function buildCasino(data: RawEntry[]): NormalizedCategory {
-  const entry = findByKey(data, "st8_casino_callbacks");
+  const entry = findEntry(data, "casino", "st8_casino_callbacks");
   const checks = entry ? [toLeaf(entry)] : [];
 
   return {
@@ -215,7 +228,7 @@ function notIntegratedCategory(key: string, label: string): NormalizedCategory {
 function buildOther(data: RawEntry[], checkedAt: string): NormalizedCategory {
   const checks: NormalizedNode[] = [];
 
-  const depositFlow = findByKey(data, "business_flow_deposit");
+  const depositFlow = findEntry(data, "payment", "business_flow_deposit");
   if (depositFlow?.steps) {
     checks.push(toGroup(depositFlow, depositFlow.steps, checkedAt));
   }
@@ -225,7 +238,15 @@ function buildOther(data: RawEntry[], checkedAt: string): NormalizedCategory {
   // opposed to a real request that came back unhealthy) -- passed through
   // as-is, plus our own investigation finding attached as a note rather
   // than silently trusting the raw "down".
-  const socketEntry = findByKey(data, "socket");
+  //
+  // NOTE (2026-09-23): this key+service pair no longer appears in the
+  // real 40-entry response at all -- the old "Socket Service" check
+  // (service "socket", key "socket") seems to have been replaced by a new
+  // "sports_bet" entry (service "sports_bet", key "sports_bet", also
+  // method "n/a", now a 403 instead of a 404). Left as-is here rather than
+  // guessing at a rename -- findEntry below will simply return undefined
+  // until this is confirmed and deliberately re-pointed.
+  const socketEntry = findEntry(data, "socket", "socket");
   if (socketEntry) {
     checks.push({
       ...toLeaf(socketEntry),
