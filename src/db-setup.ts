@@ -166,6 +166,18 @@ ALTER TABLE players ADD COLUMN IF NOT EXISTS country TEXT;
 -- row backfills to "not flagged" rather than NULL.
 ALTER TABLE payments ADD COLUMN IF NOT EXISTS flagged_delayed BOOLEAN NOT NULL DEFAULT false;
 
+-- Ordering guard for the payments upsert (src/webhooks/payments.ts): the
+-- envelope's own timestamp field (when the platform sent this event),
+-- NOT received_at (when we happened to receive/process it) -- confirmed
+-- live 2026-09-23 that two close-together webhook writes (withdrawal
+-- 6ab3a2c50ec99d159c970c0a's .completed then .rejected, 8 seconds apart)
+-- landed out of order in the database: the older .completed write's
+-- INSERT/UPDATE physically committed after the newer .rejected write's,
+-- silently overwriting the correct, newer status with a stale one. Every
+-- upsert now only applies if the incoming event's timestamp is strictly
+-- newer than whatever's already stored here.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS event_timestamp TIMESTAMPTZ;
+
 -- Partial index: only covers withdrawals the detector still needs to look
 -- at (unflagged). Shrinks as withdrawals get flagged instead of growing
 -- with the whole payments table.

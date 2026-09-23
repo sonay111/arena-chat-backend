@@ -362,3 +362,151 @@ test("/withdrawals with createdAt present: the provided value wins over dateTime
   await cleanupEventId(eventId);
   await cleanupPayment(paymentId);
 });
+
+// Ordering guard (added after a real race found live 2026-09-23 on
+// withdrawal 6ab3a2c50ec99d159c970c0a): two close-together webhook writes
+// landed out of order in the database, the older .completed write
+// physically committing after the newer .rejected write and silently
+// overwriting it. These tests send the events in reverse chronological
+// HTTP-arrival order on purpose -- if the guard only compared "did I
+// arrive later," reversing arrival order would flip the outcome; since it
+// compares the envelope's own timestamp instead, arrival order must never
+// matter, only which event is actually newer.
+
+test("ordering guard: an older event arriving AFTER a newer one must not overwrite it", async () => {
+  const paymentId = "test_payment_ordering_guard_1";
+  const olderEventId = "test_evt_ordering_guard_1_older";
+  const newerEventId = "test_evt_ordering_guard_1_newer";
+
+  const newerEnvelope = {
+    event: "withdrawal.completed",
+    eventId: newerEventId,
+    timestamp: "2026-09-23T09:58:46.565Z", // real newer timestamp from the live race
+    data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_1", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "completed" },
+  };
+  const olderEnvelope = {
+    event: "withdrawal.initiated",
+    eventId: olderEventId,
+    timestamp: "2026-09-23T09:58:29.780Z", // real older timestamp from the live race
+    data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_1", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "pending" },
+  };
+
+  // Newer event's HTTP request sent and processed FIRST...
+  const first = await post("/withdrawals", JSON.stringify(newerEnvelope), sign(JSON.stringify(newerEnvelope)));
+  assert.equal(first.status, 200);
+  // ...then the older event arrives SECOND, simulating its database write
+  // landing after the newer one's.
+  const second = await post("/withdrawals", JSON.stringify(olderEnvelope), sign(JSON.stringify(olderEnvelope)));
+  assert.equal(second.status, 200, "the older event is still accepted (200), just doesn't win the upsert");
+
+  const payment = await pool.query("SELECT status, event_timestamp FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1);
+  assert.equal(payment.rows[0].status, "completed", "the older .initiated/pending event must not overwrite the newer .completed status");
+  assert.equal(payment.rows[0].event_timestamp.toISOString(), "2026-09-23T09:58:46.565Z");
+
+  await cleanupEventId(olderEventId);
+  await cleanupEventId(newerEventId);
+  await cleanupPayment(paymentId);
+});
+
+test("ordering guard: a newer event arriving AFTER an older one correctly wins (the normal case still works)", async () => {
+  const paymentId = "test_payment_ordering_guard_2";
+  const olderEventId = "test_evt_ordering_guard_2_older";
+  const newerEventId = "test_evt_ordering_guard_2_newer";
+
+  const olderEnvelope = {
+    event: "withdrawal.initiated",
+    eventId: olderEventId,
+    timestamp: "2026-09-23T09:58:29.780Z",
+    data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_2", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "pending" },
+  };
+  const newerEnvelope = {
+    event: "withdrawal.completed",
+    eventId: newerEventId,
+    timestamp: "2026-09-23T09:58:46.565Z",
+    data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_2", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "completed" },
+  };
+
+  const first = await post("/withdrawals", JSON.stringify(olderEnvelope), sign(JSON.stringify(olderEnvelope)));
+  assert.equal(first.status, 200);
+  const second = await post("/withdrawals", JSON.stringify(newerEnvelope), sign(JSON.stringify(newerEnvelope)));
+  assert.equal(second.status, 200);
+
+  const payment = await pool.query("SELECT status FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rows[0].status, "completed");
+
+  await cleanupEventId(olderEventId);
+  await cleanupEventId(newerEventId);
+  await cleanupPayment(paymentId);
+});
+
+test("ordering guard: reproduces the exact real race (initiated, completed, rejected) -- final status is 'rejected' regardless of send order", async () => {
+  const paymentId = "test_payment_ordering_guard_3";
+  const ids = {
+    initiated: "test_evt_ordering_guard_3_initiated",
+    completed: "test_evt_ordering_guard_3_completed",
+    rejected: "test_evt_ordering_guard_3_rejected",
+  };
+  const envelopes = {
+    initiated: {
+      event: "withdrawal.initiated",
+      eventId: ids.initiated,
+      timestamp: "2026-09-23T09:58:29.780Z",
+      data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_3", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "pending" },
+    },
+    completed: {
+      event: "withdrawal.completed",
+      eventId: ids.completed,
+      timestamp: "2026-09-23T09:58:46.565Z",
+      data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_3", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "completed" },
+    },
+    rejected: {
+      event: "withdrawal.rejected",
+      eventId: ids.rejected,
+      timestamp: "2026-09-23T09:58:54.629Z", // the real newest timestamp from the live race
+      data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_3", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "rejected" },
+    },
+  };
+
+  // Sent deliberately OUT of chronological order (rejected -> initiated ->
+  // completed) -- the real live race was in-order arrival with an
+  // out-of-order DB commit; sending out of order here exercises the same
+  // guard property (result must depend only on timestamp, never on
+  // arrival/commit order) even more directly.
+  for (const key of ["rejected", "initiated", "completed"] as const) {
+    const bodyString = JSON.stringify(envelopes[key]);
+    const { status } = await post("/withdrawals", bodyString, sign(bodyString));
+    assert.equal(status, 200);
+  }
+
+  const payment = await pool.query("SELECT status, event_timestamp FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rows[0].status, "rejected", "the newest event by timestamp always wins, regardless of send order");
+  assert.equal(payment.rows[0].event_timestamp.toISOString(), "2026-09-23T09:58:54.629Z");
+
+  await cleanupEventId(ids.initiated);
+  await cleanupEventId(ids.completed);
+  await cleanupEventId(ids.rejected);
+  await cleanupPayment(paymentId);
+});
+
+test("ordering guard: a brand-new payment always accepts its first event regardless of timestamp", async () => {
+  const paymentId = "test_payment_ordering_guard_first_insert";
+  const eventId = "test_evt_ordering_guard_first_insert";
+  const envelope = {
+    event: "withdrawal.initiated",
+    eventId,
+    timestamp: "2020-01-01T00:00:00.000Z", // deliberately old -- there's nothing stored yet to compare against
+    data: { _id: paymentId, userId: "TEST_PLAYER_ORDERING_GUARD_FIRST", paymentType: "withdrawal", amount: 1000, currency: "INR", status: "pending" },
+  };
+  const bodyString = JSON.stringify(envelope);
+
+  const { status } = await post("/withdrawals", bodyString, sign(bodyString));
+  assert.equal(status, 200);
+
+  const payment = await pool.query("SELECT status FROM payments WHERE id = $1", [paymentId]);
+  assert.equal(payment.rowCount, 1, "the first event for a payment is never rejected just because its timestamp looks old");
+  assert.equal(payment.rows[0].status, "pending");
+
+  await cleanupEventId(eventId);
+  await cleanupPayment(paymentId);
+});

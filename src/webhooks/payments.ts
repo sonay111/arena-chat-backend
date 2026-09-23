@@ -37,6 +37,16 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
     return res.status(400).json({ ok: false });
   }
 
+  // The envelope's own `timestamp` -- when the platform sent this event --
+  // NOT when we received/processed it. Used below as an ordering guard:
+  // confirmed live 2026-09-23 that two close-together webhook writes
+  // (withdrawal 6ab3a2c50ec99d159c970c0a's .completed then .rejected, 8
+  // seconds apart) landed out of order in Postgres -- the older .completed
+  // write's INSERT physically committed after the newer .rejected write's,
+  // silently overwriting the correct, newer status. A plain last-write-wins
+  // upsert has no protection against that; this does.
+  const eventTimestamp = req.webhookEnvelope?.timestamp ?? null;
+
   // Real traffic confirmed 2026-08-25: some /deposits deliveries omit
   // paymentType entirely (a simpler shape than the "initiated"/"status_updated"
   // examples this code was originally built against, which always carried
@@ -65,9 +75,9 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
          id, user_id, payment_type, type, payment_method, reference_no, amount,
          currency, status, payment_status, approval_status, screenshot, is_reapproved,
          payment_id, ip, is_chargedback, is_wegered, gateway,
-         network_fee, payment_data, bank_id, remark, created_at, updated_at
+         network_fee, payment_data, bank_id, remark, created_at, updated_at, event_timestamp
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
        ON CONFLICT (id) DO UPDATE SET
          user_id         = EXCLUDED.user_id,
          payment_type    = EXCLUDED.payment_type,
@@ -90,7 +100,9 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
          payment_data    = EXCLUDED.payment_data,
          bank_id         = EXCLUDED.bank_id,
          remark          = EXCLUDED.remark,
-         updated_at      = EXCLUDED.updated_at`,
+         updated_at      = EXCLUDED.updated_at,
+         event_timestamp = EXCLUDED.event_timestamp
+       WHERE payments.event_timestamp IS NULL OR EXCLUDED.event_timestamp > payments.event_timestamp`,
       [
         data._id,
         data.userId,
@@ -116,6 +128,7 @@ async function handlePaymentWebhook(routePath: string, req: Request, res: Respon
         data.remark ?? null,
         createdAt,
         data.updatedAt ?? null,
+        eventTimestamp,
       ]
     );
 
