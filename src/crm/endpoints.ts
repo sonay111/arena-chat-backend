@@ -205,6 +205,48 @@ export async function getAllSportsbookData(
   };
 }
 
+// Confirmed real 2026-09-24: always returns pending bets whose match has
+// ended AND the player still exists -- the platform's own authoritative
+// answer to "is this bet stuck," replacing our own DIY match_absent_from_feed
+// inference (src/settlement-delay/). Same shape as sportsbook-data/
+// all-sportsbook-data exactly (data.betHistory + the same 5 summary
+// fields + the same page/currentPage/totalData pagination) -- no bet_status
+// param needed or accepted, since this endpoint is already filtered server-side.
+export async function getUnsettledBets(
+  userId: string,
+  params: PageParams = {}
+): Promise<{ bets: SportsbookBet[]; pagination: Pagination; summary: BetSummary }> {
+  const json = await crmGet<{ data: any }>(`/crm/unsettled-bets/${userId}`, params);
+  return {
+    bets: json.data.betHistory,
+    pagination: toPagination(json.data),
+    summary: {
+      totalStakeAmount: json.data.totalStakeAmount,
+      averageBetAmount: json.data.averageBetAmount,
+      winLossAmount: json.data.winLossAmount,
+      customerGGR: json.data.customerGGR,
+      customerNGR: json.data.customerNGR,
+    },
+  };
+}
+
+export async function getAllUnsettledBets(
+  params: PageParams = {}
+): Promise<{ bets: SportsbookBet[]; pagination: Pagination; summary: BetSummary }> {
+  const json = await crmGet<{ data: any }>("/crm/all-unsettled-bets", params);
+  return {
+    bets: json.data.betHistory,
+    pagination: toPagination(json.data),
+    summary: {
+      totalStakeAmount: json.data.totalStakeAmount,
+      averageBetAmount: json.data.averageBetAmount,
+      winLossAmount: json.data.winLossAmount,
+      customerGGR: json.data.customerGGR,
+      customerNGR: json.data.customerNGR,
+    },
+  };
+}
+
 // DOC CONTRADICTION (same as the per-user casino endpoint): the Common
 // Params table lists bet_status as "Sportsbook/casino status filter",
 // implying it applies here, but the doc's own Casino Data code example

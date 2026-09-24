@@ -3,65 +3,67 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";
 import { createSettlementDelayRouter } from "./routes.js";
-import type { SportsbookBet, CrmLiveMatch } from "../crm/index.js";
+import type { UnsettledBetsResult } from "./unsettled-bets.js";
 
-// Real HTTP request against the actual router, both CRM dependencies
-// stubbed (createSettlementDelayRouter's injectable fetchPendingBets/
-// fetchLiveMatches) -- same convention as odds-feed/service-health routes.
+// Real HTTP request against the actual router, the single CRM dependency
+// stubbed (createSettlementDelayRouter's injectable fetchUnsettledBets) --
+// same convention as odds-feed/service-health routes.
 
 let baseUrl: string;
 let server: http.Server;
 
-// Real fixtures, same ones detect.test.ts uses.
-const stubPendingBets: SportsbookBet[] = [
-  {
-    _id: "6ab216808da72b1a3a675bc7",
-    userId: "6a4257cf126678e77124ce98",
-    stakeAmount: 200,
-    returnAmount: 650,
-    winLossAmount: 450,
-    eventMarketInformation: { matchId: "sr:match:74559842" },
-    betDateTime: "2026-09-22T05:47:44.484Z",
-    status: "pending",
+// Real fixture from the live /crm/all-unsettled-bets call, 2026-09-24.
+const stubResult: UnsettledBetsResult = {
+  bets: [
+    {
+      _id: "6a8fe3de933517fed4fbf3a0",
+      userId: "6a8e9b7f2ae5ea6dac1ce929",
+      stakeAmount: 3,
+      returnAmount: 4.71,
+      winLossAmount: 1.71,
+      eventMarketInformation: {
+        matchId: "sr:match:73285234",
+        marketId: "363",
+        marketName: "1st innings over 1 - 1st delivery Melbourne Renegades SRL total",
+        betTitle: "over 0.5",
+        teamName: "over 0.5",
+        tournamentName: "Brisbane Heat SRL vs Melbourne Renegades SRL",
+        sportsType: "sr:sport:21",
+      },
+      betDateTime: "2026-08-27T07:14:38.815Z",
+      status: "pending",
+    },
+    {
+      _id: "6a146647d4c280c6b65205e2",
+      userId: "6a1465c44f20d11059ee424b",
+      stakeAmount: 5,
+      returnAmount: 8.5,
+      winLossAmount: 3.5,
+      eventMarketInformation: {
+        matchId: "sr:match:71501210",
+        marketId: "357",
+        marketName: "1st innings over 11 - Paarl Royals SRL total",
+        betTitle: "over 7.5",
+        teamName: "over 7.5",
+        tournamentName: "Mi Cape Town SRL vs Paarl Royals SRL",
+        sportsType: "sports",
+      },
+      betDateTime: "2026-05-25T15:09:59.598Z",
+      status: "pending",
+    },
+  ],
+  summary: {
+    totalStakeAmount: 8,
+    averageBetAmount: 4,
+    winLossAmount: 5.21,
+    customerGGR: -5.21,
+    customerNGR: -5.21,
   },
-  {
-    _id: "6a9520d1c16e52500924b3ee",
-    userId: "6a8c4143fcfb41d24e07e577",
-    stakeAmount: 10000,
-    returnAmount: 24500,
-    winLossAmount: 14500,
-    eventMarketInformation: { matchId: "sr:match:73281486" },
-    betDateTime: "2026-08-31T06:36:01.058Z",
-    status: "pending",
-  },
-];
-
-const stubLiveMatches: CrmLiveMatch[] = [
-  {
-    matchId: "sr:match:74559842",
-    sportId: "sr:sport:21",
-    status: "Live",
-    sportName: "Cricket",
-    team1Name: "India A",
-    team2Name: "Australia A",
-    tournamentName: "First Class Series India A vs Australia A",
-    region: "International",
-    startTime: "2026-09-22T04:00:00.000Z",
-    updatedAt: "2026-09-24T07:21:22.877Z",
-    producerId: 5,
-    connection: true,
-    hasOdds: true,
-  },
-];
+};
 
 before(async () => {
   const app = express();
-  app.use(
-    createSettlementDelayRouter(
-      async () => stubPendingBets,
-      async () => ({ matches: stubLiveMatches, totalData: stubLiveMatches.length })
-    )
-  );
+  app.use(createSettlementDelayRouter(async () => stubResult));
   server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const address = server.address();
@@ -75,31 +77,40 @@ after(async () => {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 });
 
-test("GET /settlement-delays: the still-Live bet is absent, the feed-absent bet is flagged", async () => {
+test("GET /settlement-delays: both real bets appear as overdue, grouped by match", async () => {
   const res = await fetch(`${baseUrl}/settlement-delays`);
   assert.equal(res.status, 200);
   const body = await res.json();
 
-  assert.equal(body.overdueBets.length, 1);
-  assert.equal(body.overdueBets[0].betId, "6a9520d1c16e52500924b3ee");
-  assert.equal(body.overdueBets[0].reason, "match_absent_from_feed");
-  assert.equal(body.overdueBets[0].stakeAmount, 10000);
+  assert.equal(body.overdueBets.length, 2);
+  assert.deepEqual(
+    body.overdueBets.map((b: any) => b.betId),
+    ["6a8fe3de933517fed4fbf3a0", "6a146647d4c280c6b65205e2"]
+  );
+  assert.equal(body.overdueBets[0].reason, "confirmed_unsettled_by_platform");
 
-  assert.equal(body.byMatch.length, 1);
-  assert.equal(body.byMatch[0].matchId, "sr:match:73281486");
-  assert.equal(body.byMatch[0].overdueBetCount, 1);
-  assert.equal(body.byMatch[0].totalOverdueStake, 10000);
+  assert.equal(body.byMatch.length, 2);
+});
+
+test("GET /settlement-delays: summary is the endpoint's own real aggregate, not re-summed", async () => {
+  const res = await fetch(`${baseUrl}/settlement-delays`);
+  const body = await res.json();
+
+  assert.deepEqual(body.summary, {
+    totalStakeAmount: 8,
+    averageBetAmount: 4,
+    winLossAmount: 5.21,
+    customerGGR: -5.21,
+    customerNGR: -5.21,
+  });
 });
 
 test("GET /settlement-delays: a CRM failure returns 500 rather than a partial body", async () => {
   const app = express();
   app.use(
-    createSettlementDelayRouter(
-      async () => {
-        throw new Error("CRM sportsbook-data unreachable");
-      },
-      async () => ({ matches: [], totalData: 0 })
-    )
+    createSettlementDelayRouter(async () => {
+      throw new Error("CRM unsettled-bets unreachable");
+    })
   );
   const failingServer = http.createServer(app);
   await new Promise<void>((resolve) => failingServer.listen(0, resolve));

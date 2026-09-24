@@ -28,6 +28,14 @@ export type PaymentTransaction = {
   status: string;
 };
 
+// Naming quirk confirmed live across multiple real calls (sportsbook-data,
+// unsettled-bets), 2026-09: `betTitle`, not `betName` as the CRM Frontend
+// API Guide's own field table documents -- the webhook payload shape
+// (sportsbook.bet_placed/bet_settled, see src/activity/describe.test.ts)
+// genuinely does use betName, but that's a different upstream source than
+// this REST API. Also: tournamentName is the fixture (e.g. "Team A vs Team
+// B"), teamName is actually the selection the bet was placed on, not a
+// team -- already known from other endpoints, not re-derived here.
 export type SportsbookBet = {
   _id: string;
   userId: string;
@@ -36,8 +44,9 @@ export type SportsbookBet = {
   winLossAmount: number;
   eventMarketInformation: {
     matchId?: string;
+    marketId?: string;
     marketName?: string;
-    betName?: string;
+    betTitle?: string;
     teamName?: string;
     tournamentName?: string;
     sportsType?: string;
