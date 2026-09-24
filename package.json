@@ -22,7 +22,8 @@
     "test:crm": "tsx --test src/crm/*.test.ts",
     "test:goal-inference": "tsx --test src/goal-inference/*.test.ts",
     "test:odds-feed": "tsx --test src/odds-feed/*.test.ts",
-    "test:service-health": "tsx --test src/service-health/*.test.ts"
+    "test:service-health": "tsx --test src/service-health/*.test.ts",
+    "test:settlement-delay": "tsx --test src/settlement-delay/*.test.ts"
   },
   "keywords": [],
   "author": "",
