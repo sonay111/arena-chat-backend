@@ -8,6 +8,15 @@ Backend for Arena365's AI live chat support tool. One Node.js service, one Postg
 
 All three run in the same process, on the same port, sharing the same database. There is no separate chat service and webhook service — see [`CLAUDE.md`](./CLAUDE.md) if you want the full "why," but for deploying this, that's the whole picture.
 
+## Two independent projects in this repo
+
+This repo holds two unrelated codebases side by side:
+
+- **This backend** — everything described above (root `src/`, root `package.json`).
+- **[`cx-agent/`](./cx-agent)** — Palig's CX support agent: a standalone Node.js/TypeScript/Express service (Supabase + Telegram + Anthropic) that polls a withdrawal-delay feed and drafts/sends customer messages, escalating to a human when needed. Imported as-is from its own repo, [`palig369/arena365-cx-tool`](https://github.com/palig369/arena365-cx-tool). Note: `cx-agent/README.md` still says OpenRouter — that's stale relative to the actual code, which now uses Anthropic directly (`src/ai/client.ts`).
+
+They're independent — separate `package.json`, `node_modules`, and `tsconfig.json`, not part of the same build or install. `npm install`/`npm run dev` at the repo root only affects this backend; `cx-agent/` needs its own `cd cx-agent && npm install` and has its own README with full setup instructions.
+
 ## Requirements
 
 - **Node.js 20+** (developed on v20.20.2)
