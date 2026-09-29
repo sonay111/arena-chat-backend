@@ -298,6 +298,17 @@ CREATE TABLE IF NOT EXISTS odds_status_transitions (
   changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_odds_status_transitions_match ON odds_status_transitions (match_id);
+
+-- ===== Support Chat webhook idempotency (src/support-chat/) =====
+-- customer_message_received deliveries carry a messageId; a retried
+-- delivery must not call the downstream handler twice. INSERT ... ON
+-- CONFLICT DO NOTHING against this table is the atomic "claim" -- the
+-- first caller to insert a given id gets to process it, every retry after
+-- gets rowCount 0 and skips (see src/support-chat/idempotency.ts).
+CREATE TABLE IF NOT EXISTS support_chat_processed_messages (
+  message_id   TEXT PRIMARY KEY,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 async function main() {

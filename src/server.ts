@@ -11,6 +11,7 @@ import { goalInferenceRouter } from "./goal-inference/index.js";
 import { startOddsFeed, oddsFeedRouter } from "./odds-feed/index.js";
 import { serviceHealthRouter } from "./service-health/index.js";
 import { settlementDelayRouter } from "./settlement-delay/index.js";
+import { supportChatRouter } from "./support-chat/index.js";
 
 // TEMPORARY BYPASS — off by default. Our server's IP isn't allowlisted by
 // Satyam's team yet, so every real CRM lookup below currently fails with
@@ -52,6 +53,7 @@ app.use(goalInferenceRouter);
 app.use(oddsFeedRouter);
 app.use(serviceHealthRouter);
 app.use(settlementDelayRouter);
+app.use(supportChatRouter);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } }); // tighten origin later

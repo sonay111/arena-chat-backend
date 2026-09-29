@@ -23,7 +23,8 @@
     "test:goal-inference": "tsx --test src/goal-inference/*.test.ts",
     "test:odds-feed": "tsx --test src/odds-feed/*.test.ts",
     "test:service-health": "tsx --test src/service-health/*.test.ts",
-    "test:settlement-delay": "tsx --test src/settlement-delay/*.test.ts"
+    "test:settlement-delay": "tsx --test src/settlement-delay/*.test.ts",
+    "test:support-chat": "tsx --test src/support-chat/*.test.ts"
   },
   "keywords": [],
   "author": "",
