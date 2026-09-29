@@ -33,7 +33,7 @@ export function createSupportChatRouter(
 
       try {
         if (event.event === "customer_message_received") {
-          const messageId = (event.data as Record<string, unknown> | undefined)?.messageId;
+          const messageId = event.messageId;
           if (typeof messageId !== "string" || messageId === "") {
             return res.status(400).json({ ok: false });
           }

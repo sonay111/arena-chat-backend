@@ -36,9 +36,25 @@ export function isValidSupportChatSignature(
   return crypto.timingSafeEqual(expected, provided);
 }
 
+// Confirmed real shape (2026-09-29, first live customer_message_received
+// delivery) — a FLAT envelope, not the {event, data} nesting our own
+// outbound webhooks use. messageId/conversationId/userId/body/createdAt/
+// brand all sit directly on the top-level object alongside event. All
+// optional here since only customer_message_received has been observed
+// live so far; other event types may carry a different subset.
+//
+// brand (seen: "crazybet") identifies which Support Chat tenant/brand the
+// event came from — not used for anything yet, but worth keeping in mind
+// as a tenant-identification signal for later, alongside/instead of the
+// x-tenant-domain header client.ts sends on outbound requests.
 export type SupportChatWebhookEvent = {
   event: string;
-  data: Record<string, unknown>;
+  messageId?: string;
+  conversationId?: string;
+  userId?: string;
+  body?: string;
+  createdAt?: string;
+  brand?: string;
   [key: string]: unknown;
 };
 

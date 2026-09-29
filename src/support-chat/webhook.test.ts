@@ -52,10 +52,20 @@ test("isValidSupportChatSignature: fails when the signature is empty string", ()
   assert.equal(isValidSupportChatSignature(body, "", SECRET), false);
 });
 
-test("parseSupportChatWebhookBody: parses a real-shaped envelope", () => {
-  const body = Buffer.from('{"event":"customer_message_received","data":{"conversationId":"c1","message":"hi"}}');
+test("parseSupportChatWebhookBody: parses the real flat envelope (no data wrapper)", () => {
+  // Matches the real customer_message_received delivery captured live
+  // 2026-09-29 — messageId/conversationId/etc. sit directly on the
+  // top-level object, not nested under a "data" key.
+  const body = Buffer.from(
+    '{"event":"customer_message_received","messageId":"m1","conversationId":"c1","body":"hi"}'
+  );
   const parsed = parseSupportChatWebhookBody(body);
-  assert.deepEqual(parsed, { event: "customer_message_received", data: { conversationId: "c1", message: "hi" } });
+  assert.deepEqual(parsed, {
+    event: "customer_message_received",
+    messageId: "m1",
+    conversationId: "c1",
+    body: "hi",
+  });
 });
 
 test("parseSupportChatWebhookBody: returns null on invalid JSON, doesn't throw", () => {

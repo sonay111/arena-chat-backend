@@ -11,6 +11,11 @@ import type { SupportChatWebhookEvent } from "./webhook.js";
 // convention as src/webhooks/webhooks.test.ts. Idempotency tests also hit
 // the real local Postgres (same convention as src/webhooks/webhooks.test.ts
 // using pool directly), cleaning up their own rows after.
+//
+// Envelope shape used throughout (flat: messageId/conversationId/etc. as
+// top-level fields alongside event, no data wrapper) matches the real
+// customer_message_received delivery captured live 2026-09-29 — see the
+// dedicated "real captured payload" test below for the literal example.
 
 const SECRET = process.env.SUPPORT_CHAT_WEBHOOK_SECRET;
 if (!SECRET) {
@@ -56,7 +61,9 @@ test("POST /support-chat/webhook: a valid signature on a customer_message_receiv
   const messageId = "msg-test-basic-1";
   const bodyString = JSON.stringify({
     event: "customer_message_received",
-    data: { conversationId: "c1", message: "hello", messageId },
+    messageId,
+    conversationId: "c1",
+    body: "hello",
   });
   try {
     const { status, body } = await post(baseUrl, bodyString, sign(bodyString));
@@ -65,7 +72,9 @@ test("POST /support-chat/webhook: a valid signature on a customer_message_receiv
     assert.equal(receivedEvents.length, 1);
     assert.deepEqual(receivedEvents[0], {
       event: "customer_message_received",
-      data: { conversationId: "c1", message: "hello", messageId },
+      messageId,
+      conversationId: "c1",
+      body: "hello",
     });
   } finally {
     await pool.query("DELETE FROM support_chat_processed_messages WHERE message_id = $1", [messageId]);
@@ -74,7 +83,7 @@ test("POST /support-chat/webhook: a valid signature on a customer_message_receiv
 
 test("POST /support-chat/webhook: an unrecognized event type is acknowledged (200) but the handler is not called", async () => {
   const before = receivedEvents.length;
-  const bodyString = JSON.stringify({ event: "some_other_event", data: {} });
+  const bodyString = JSON.stringify({ event: "some_other_event" });
   const { status, body } = await post(baseUrl, bodyString, sign(bodyString));
   assert.equal(status, 200);
   assert.deepEqual(body, { ok: true });
@@ -83,7 +92,7 @@ test("POST /support-chat/webhook: an unrecognized event type is acknowledged (20
 
 test("POST /support-chat/webhook: invalid signature is rejected with 401, handler never called", async () => {
   const before = receivedEvents.length;
-  const bodyString = JSON.stringify({ event: "customer_message_received", data: { messageId: "msg-invalid-sig" } });
+  const bodyString = JSON.stringify({ event: "customer_message_received", messageId: "msg-invalid-sig" });
   const { status, body } = await post(baseUrl, bodyString, sign(bodyString) + "00");
   assert.equal(status, 401);
   assert.deepEqual(body, { error: "unauthorized" });
@@ -91,7 +100,7 @@ test("POST /support-chat/webhook: invalid signature is rejected with 401, handle
 });
 
 test("POST /support-chat/webhook: missing signature header is rejected with 401", async () => {
-  const bodyString = JSON.stringify({ event: "customer_message_received", data: { messageId: "msg-missing-sig" } });
+  const bodyString = JSON.stringify({ event: "customer_message_received", messageId: "msg-missing-sig" });
   const { status } = await post(baseUrl, bodyString, undefined);
   assert.equal(status, 401);
 });
@@ -105,7 +114,7 @@ test("POST /support-chat/webhook: a validly-signed but malformed JSON body retur
 
 test("POST /support-chat/webhook: a customer_message_received event with no messageId returns 400, handler never called", async () => {
   const before = receivedEvents.length;
-  const bodyString = JSON.stringify({ event: "customer_message_received", data: { conversationId: "c1" } });
+  const bodyString = JSON.stringify({ event: "customer_message_received", conversationId: "c1" });
   const { status, body } = await post(baseUrl, bodyString, sign(bodyString));
   assert.equal(status, 400);
   assert.deepEqual(body, { ok: false });
@@ -116,7 +125,9 @@ test("POST /support-chat/webhook: the same messageId delivered twice only calls 
   const messageId = "msg-test-duplicate-1";
   const bodyString = JSON.stringify({
     event: "customer_message_received",
-    data: { conversationId: "c1", message: "hello again", messageId },
+    messageId,
+    conversationId: "c1",
+    body: "hello again",
   });
   try {
     const first = await post(baseUrl, bodyString, sign(bodyString));
@@ -126,9 +137,7 @@ test("POST /support-chat/webhook: the same messageId delivered twice only calls 
     assert.equal(second.status, 200);
     assert.deepEqual(second.body, { ok: true });
 
-    const matching = receivedEvents.filter(
-      (e) => (e.data as Record<string, unknown>).messageId === messageId
-    );
+    const matching = receivedEvents.filter((e) => e.messageId === messageId);
     assert.equal(matching.length, 1, "handler should only run once for a retried delivery");
   } finally {
     await pool.query("DELETE FROM support_chat_processed_messages WHERE message_id = $1", [messageId]);
@@ -147,7 +156,7 @@ test("POST /support-chat/webhook: a handler that throws returns 500, not an unha
   const failingBaseUrl = `http://127.0.0.1:${address.port}`;
 
   const messageId = "msg-test-handler-throws";
-  const bodyString = JSON.stringify({ event: "customer_message_received", data: { messageId } });
+  const bodyString = JSON.stringify({ event: "customer_message_received", messageId });
   try {
     const { status } = await post(failingBaseUrl, bodyString, sign(bodyString));
     assert.equal(status, 500);
@@ -172,11 +181,41 @@ test("POST /support-chat/webhook: a stubbed claimMessageId returning false skips
   if (typeof address !== "object" || address === null) throw new Error("failed to bind");
   const stubBaseUrl = `http://127.0.0.1:${address.port}`;
 
-  const bodyString = JSON.stringify({ event: "customer_message_received", data: { messageId: "msg-stub-claim" } });
+  const bodyString = JSON.stringify({ event: "customer_message_received", messageId: "msg-stub-claim" });
   const { status, body } = await post(stubBaseUrl, bodyString, sign(bodyString));
   assert.equal(status, 200);
   assert.deepEqual(body, { ok: true });
   assert.equal(handlerCalls, 0);
 
   await new Promise<void>((resolve, reject) => stubServer.close((err) => (err ? reject(err) : resolve())));
+});
+
+test("POST /support-chat/webhook: the real captured payload (first live delivery, 2026-09-29) is accepted and processed", async () => {
+  // Literal payload captured via ngrok's request inspector from the first
+  // real customer_message_received delivery. This is what exposed the
+  // {event, data} assumption as wrong — the real envelope is flat.
+  const messageId = "6abb93c6a77644ff05c55e87";
+  const bodyString = JSON.stringify({
+    event: "customer_message_received",
+    messageId,
+    conversationId: "6abb8ff6802c46f12773301f",
+    userId: "6ab65b0acc19716479b313ef",
+    body: "hiiii",
+    createdAt: "2026-09-29T10:32:38.529Z",
+    brand: "crazybet",
+  });
+  try {
+    const { status, body } = await post(baseUrl, bodyString, sign(bodyString));
+    assert.equal(status, 200);
+    assert.deepEqual(body, { ok: true });
+
+    const received = receivedEvents.find((e) => e.messageId === messageId);
+    assert.ok(received, "handler should have been called with the real payload");
+    assert.equal(received!.conversationId, "6abb8ff6802c46f12773301f");
+    assert.equal(received!.userId, "6ab65b0acc19716479b313ef");
+    assert.equal(received!.body, "hiiii");
+    assert.equal(received!.brand, "crazybet");
+  } finally {
+    await pool.query("DELETE FROM support_chat_processed_messages WHERE message_id = $1", [messageId]);
+  }
 });
