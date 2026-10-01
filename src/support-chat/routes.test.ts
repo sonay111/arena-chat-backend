@@ -6,6 +6,33 @@ import express from "express";
 import { pool } from "../db.js";
 import { createSupportChatRouter } from "./routes.js";
 import type { SupportChatWebhookEvent } from "./webhook.js";
+import { SupportChatApiError } from "./errors.js";
+import type { SupportChatMessage, SendMessageOptions } from "./endpoints.js";
+
+// Starts an isolated server with the given stubs — used by the two proxy
+// routes' tests below so they never make a real call to the external
+// Support Chat API, same DI convention as the webhook tests' "stubbed
+// claimMessageId" test further down.
+async function startStubbedServer(opts: {
+  fetchConversationMessages?: (conversationId: string, limit?: number, before?: string) => Promise<SupportChatMessage[]>;
+  sendSupportChatMessage?: (options: SendMessageOptions) => Promise<SupportChatMessage>;
+}): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const app = express();
+  app.use(createSupportChatRouter(
+    async () => {},
+    async () => true,
+    opts.fetchConversationMessages ?? (async () => []),
+    opts.sendSupportChatMessage ?? (async () => ({}))
+  ));
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  if (typeof address !== "object" || address === null) throw new Error("failed to bind");
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
 
 // Real HTTP request against the actual router + real HMAC signing, same
 // convention as src/webhooks/webhooks.test.ts. Idempotency tests also hit
@@ -217,5 +244,156 @@ test("POST /support-chat/webhook: the real captured payload (first live delivery
     assert.equal(received!.brand, "crazybet");
   } finally {
     await pool.query("DELETE FROM support_chat_processed_messages WHERE message_id = $1", [messageId]);
+  }
+});
+
+test("GET /support-chat/conversations/:id/messages: passes the result straight through, calls the client with the right id", async () => {
+  const fixture: SupportChatMessage[] = [
+    { id: "m1", body: "hello", sender: "customer" },
+    { id: "m2", body: "hi there", sender: "operator" },
+  ];
+  let calledWith: unknown[] = [];
+  const { baseUrl, close } = await startStubbedServer({
+    fetchConversationMessages: async (conversationId, limit, before) => {
+      calledWith = [conversationId, limit, before];
+      return fixture;
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/conversations/convo-123/messages`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), fixture);
+    assert.deepEqual(calledWith, ["convo-123", undefined, undefined]);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /support-chat/conversations/:id/messages: forwards limit/before query params", async () => {
+  let calledWith: unknown[] = [];
+  const { baseUrl, close } = await startStubbedServer({
+    fetchConversationMessages: async (conversationId, limit, before) => {
+      calledWith = [conversationId, limit, before];
+      return [];
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/conversations/convo-123/messages?limit=5&before=m9`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(calledWith, ["convo-123", 5, "m9"]);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /support-chat/conversations/:id/messages: a SupportChatApiError from the client is returned with its real status, not a crash", async () => {
+  const { baseUrl, close } = await startStubbedServer({
+    fetchConversationMessages: async () => {
+      throw new SupportChatApiError("Conversation not found", 404);
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/conversations/missing/messages`);
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), { error: "Conversation not found" });
+  } finally {
+    await close();
+  }
+});
+
+test("GET /support-chat/conversations/:id/messages: a SupportChatApiError with no status falls back to 502", async () => {
+  const { baseUrl, close } = await startStubbedServer({
+    fetchConversationMessages: async () => {
+      throw new SupportChatApiError("Support Chat API request failed to send: fetch failed");
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/conversations/convo-123/messages`);
+    assert.equal(res.status, 502);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /support-chat/conversations/:id/messages: a non-SupportChatApiError failure returns 500, not an unhandled crash", async () => {
+  const { baseUrl, close } = await startStubbedServer({
+    fetchConversationMessages: async () => {
+      throw new Error("something unrelated broke");
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/conversations/convo-123/messages`);
+    assert.equal(res.status, 500);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /support-chat/messages: passes the request body straight through to sendMessage, returns its result straight through", async () => {
+  const requestBody: SendMessageOptions = { body: "agent reply", conversationId: "convo-123" };
+  const fixture: SupportChatMessage = { id: "m3", body: "agent reply", conversationId: "convo-123" };
+  let calledWith: SendMessageOptions | undefined;
+  const { baseUrl, close } = await startStubbedServer({
+    sendSupportChatMessage: async (options) => {
+      calledWith = options;
+      return fixture;
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), fixture);
+    assert.deepEqual(calledWith, requestBody);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /support-chat/messages: a SupportChatApiError from the client is returned with its real status, not a crash", async () => {
+  const { baseUrl, close } = await startStubbedServer({
+    sendSupportChatMessage: async () => {
+      throw new SupportChatApiError("userId, conversationId, or paymentRef is required", 400);
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "hi" }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: "userId, conversationId, or paymentRef is required" });
+  } finally {
+    await close();
+  }
+});
+
+test("POST /support-chat/messages: a non-SupportChatApiError failure returns 500, not an unhandled crash", async () => {
+  const { baseUrl, close } = await startStubbedServer({
+    sendSupportChatMessage: async () => {
+      throw new Error("something unrelated broke");
+    },
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/support-chat/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "hi" }),
+    });
+    assert.equal(res.status, 500);
+  } finally {
+    await close();
   }
 });

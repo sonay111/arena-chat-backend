@@ -3,14 +3,24 @@ import type { Request, Response } from "express";
 import { verifySupportChatWebhookSignature, parseSupportChatWebhookBody } from "./webhook.js";
 import type { SupportChatWebhookEvent } from "./webhook.js";
 import { claimMessageId as claimMessageIdDefault } from "./idempotency.js";
+import { getConversationMessages as getConversationMessagesDefault, sendMessage as sendMessageDefault } from "./endpoints.js";
+import type { SupportChatMessage, SendMessageOptions } from "./endpoints.js";
+import { SupportChatApiError } from "./errors.js";
 
-// handleCustomerMessageReceived and claimMessageId are both injectable so
-// tests can stub them out (assert the handler was called, or force a
-// "duplicate" claim) without needing a real downstream consumer or a real
-// database — same DI convention as every other router in this project.
+// handleCustomerMessageReceived, claimMessageId, fetchConversationMessages,
+// and sendSupportChatMessage are all injectable so tests can stub them out
+// without needing a real downstream consumer, a real database, or a live
+// call to the external Support Chat API — same DI convention as every
+// other router in this project.
 export function createSupportChatRouter(
   handleCustomerMessageReceived: (event: SupportChatWebhookEvent) => Promise<void> | void = async () => {},
-  claimMessageId: (messageId: string) => Promise<boolean> = claimMessageIdDefault
+  claimMessageId: (messageId: string) => Promise<boolean> = claimMessageIdDefault,
+  fetchConversationMessages: (
+    conversationId: string,
+    limit?: number,
+    before?: string
+  ) => Promise<SupportChatMessage[]> = getConversationMessagesDefault,
+  sendSupportChatMessage: (options: SendMessageOptions) => Promise<SupportChatMessage> = sendMessageDefault
 ): Router {
   const router = Router();
 
@@ -55,6 +65,46 @@ export function createSupportChatRouter(
       }
     }
   );
+
+  // Proxy to the external Support Chat API's conversation history — Lovable
+  // calls this (not the external API directly) so the API key stays
+  // server-side only. Straight pass-through: no envelope wrapping, no
+  // reshaping, just whatever the client function returns.
+  router.get("/support-chat/conversations/:id/messages", async (req: Request<{ id: string }>, res: Response) => {
+    const { id } = req.params;
+    const limit = req.query.limit !== undefined ? Number(req.query.limit) : undefined;
+    const before = typeof req.query.before === "string" ? req.query.before : undefined;
+
+    try {
+      const messages = await fetchConversationMessages(id, limit, before);
+      res.json(messages);
+    } catch (err) {
+      if (err instanceof SupportChatApiError) {
+        res.status(err.status ?? 502).json({ error: err.message });
+      } else {
+        console.error(`GET /support-chat/conversations/${id}/messages failed:`, err);
+        res.status(500).json({ error: "internal error" });
+      }
+    }
+  });
+
+  // Proxy for Lovable to send an agent reply. req.body is passed straight
+  // through to sendMessage as-is (body/paymentRef/userId/conversationId/
+  // clientMessageId) — no validation beyond what the external API itself
+  // does, same "pass straight through" reasoning as the route above.
+  router.post("/support-chat/messages", express.json(), async (req: Request, res: Response) => {
+    try {
+      const message = await sendSupportChatMessage(req.body as SendMessageOptions);
+      res.json(message);
+    } catch (err) {
+      if (err instanceof SupportChatApiError) {
+        res.status(err.status ?? 502).json({ error: err.message });
+      } else {
+        console.error("POST /support-chat/messages failed:", err);
+        res.status(500).json({ error: "internal error" });
+      }
+    }
+  });
 
   return router;
 }

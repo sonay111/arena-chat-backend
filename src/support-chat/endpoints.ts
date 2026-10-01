@@ -29,19 +29,53 @@ export async function sendMessage(options: SendMessageOptions): Promise<SupportC
   return supportChatRequest<SupportChatMessage>("POST", "/messages", { body: options });
 }
 
-// Handles either a bare array or a { messages: [...] } envelope — whichever
-// the real API turns out to use. Narrow this once confirmed.
+// Confirmed real shape (2026-10-01, first live GET against a real
+// conversation): {message, status, data: {conversation, messages,
+// nextBefore}} — messages sit two levels down at data.messages, not at a
+// top-level "messages" key as originally guessed before any real response
+// existed. data.conversation carries richer metadata (status, agentName,
+// lastMessageAt, etc.) not surfaced here — only messages were asked for.
+export type SupportChatConversationSummary = {
+  conversationId: string;
+  userId: string;
+  status: string;
+  agentName: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  endedBy: string | null;
+  lastMessageAt: string | null;
+  lastMessageSender: string | null;
+  unreadForCustomer: number;
+};
+
+type GetConversationMessagesResponse = {
+  message: string;
+  status: boolean;
+  data: {
+    conversation: SupportChatConversationSummary;
+    messages: SupportChatMessage[];
+    nextBefore: string | null;
+  };
+};
+
+// Pure parsing step, split out so it's directly testable against the real
+// captured shape below without a live network call — same rationale as
+// parseGetUsersResponse in src/crm/endpoints.ts.
+export function parseGetConversationMessagesResponse(json: GetConversationMessagesResponse): SupportChatMessage[] {
+  return json.data.messages;
+}
+
 export async function getConversationMessages(
   conversationId: string,
   limit?: number,
   before?: string
 ): Promise<SupportChatMessage[]> {
-  const result = await supportChatRequest<{ messages?: SupportChatMessage[] } | SupportChatMessage[]>(
+  const json = await supportChatRequest<GetConversationMessagesResponse>(
     "GET",
     `/conversations/${conversationId}/messages`,
     { params: { limit, before } }
   );
-  return Array.isArray(result) ? result : (result.messages ?? []);
+  return parseGetConversationMessagesResponse(json);
 }
 
 export async function getUserConversations(userId: string): Promise<SupportChatConversation[]> {
