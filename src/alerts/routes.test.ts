@@ -17,6 +17,15 @@ import type { PlayerContext } from "../crm/index.js";
 let baseUrl: string;
 let server: http.Server;
 
+// checkWithdrawalDelays (called below to produce this suite's own fixture)
+// has no per-test scoping on its candidate query — any other real eligible
+// withdrawal sitting in the table gets processed by the fetcher below too.
+// Since CRM failure now flags anyway (player: null, see 2026-10-01 change
+// to withdrawal-delay-detector.ts), the fetcher's "unexpected userId"
+// throw would otherwise permanently flag a real row this suite doesn't
+// own. Snapshot + restore, same fix as withdrawal-delay-detector.test.ts.
+let preExistingRealRowIds: string[] = [];
+
 const id = "test_route_wd_over_10";
 const userId = "TEST_ROUTE_USER";
 const refreshPlayerId = "TEST_ROUTE_REFRESH_PLAYER";
@@ -61,6 +70,14 @@ before(async () => {
      VALUES ($1, $2, 'withdrawal', 'progress', 250, 'INR', now() - interval '15 minutes', now())`,
     [id, userId]
   );
+  const { rows: eligibleBeforeFixture } = await pool.query<{ id: string }>(
+    `SELECT id FROM payments
+     WHERE payment_type = 'withdrawal' AND flagged_delayed = false
+       AND status IS DISTINCT FROM 'completed'
+       AND created_at < now() - (10 * INTERVAL '1 minute')`
+  );
+  preExistingRealRowIds = eligibleBeforeFixture.map((r) => r.id);
+
   // Same shared-dev-DB caveat as withdrawal-delay-detector.test.ts: this
   // fetcher must only ever answer for the one userId this test created,
   // not any other eligible row the candidate query happens to also find.
@@ -163,6 +180,11 @@ before(async () => {
 });
 
 after(async () => {
+  if (preExistingRealRowIds.length > 0) {
+    await pool.query(`UPDATE payments SET flagged_delayed = false WHERE id = ANY($1)`, [preExistingRealRowIds]);
+    await pool.query(`DELETE FROM withdrawal_delay_alerts WHERE payment_id = ANY($1)`, [preExistingRealRowIds]);
+  }
+
   await pool.query("DELETE FROM withdrawal_delay_alerts WHERE payment_id = $1", [id]);
   await pool.query("DELETE FROM payments WHERE id = $1", [id]);
   await pool.query("DELETE FROM refresh_alerts WHERE player_id = $1", [refreshPlayerId]);

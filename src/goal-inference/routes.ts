@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getPlayerContext, CrmApiError } from "../crm/index.js";
+import { getPlayerContextAnyBrand, CrmApiError } from "../crm/index.js";
 import type { PlayerContext } from "../crm/index.js";
 import { inferGoal } from "./infer.js";
 import type { GoalInferencePlayer } from "./infer.js";
@@ -10,8 +10,15 @@ import { buildWebhookHistory } from "./webhook-history.js";
 // rationale as checkWithdrawalDelays (src/alerts/withdrawal-delay-detector.ts)
 // — no mocking library in this project, and real CRM calls depend on our
 // server's IP being allowlisted.
+//
+// Defaults to getPlayerContextAnyBrand, same reasoning as
+// checkWithdrawalDelays: a :playerId URL param carries no brand signal
+// either, and this route's own catch-CrmApiError-and-fall-through-to-Tier-2
+// behavior already treats "not found" as a normal, expected outcome — not
+// explicitly asked for this file in the original request, but it has the
+// identical structural gap, so applying the same fix here too.
 export function createGoalInferenceRouter(
-  fetchPlayerContext: (userId: string) => Promise<PlayerContext> = getPlayerContext
+  fetchPlayerContext: (userId: string) => Promise<PlayerContext> = getPlayerContextAnyBrand
 ): Router {
   const router = Router();
 

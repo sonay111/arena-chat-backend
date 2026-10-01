@@ -3,6 +3,22 @@ import { getUsers, CrmApiError } from "./crm/index.js";
 import { mapDialingCodeToCountry } from "./crm/dialing-code-to-country.js";
 import { CATEGORIES, REAL_USER_ID_PATTERN, SYNTHETIC_USER_ID } from "./activity/shared.js";
 
+// These players came from webhooks, which carry no brand signal (confirmed
+// gap, 2026-09-30) — same reasoning as getPlayerContextAnyBrand
+// (src/crm/player-context.ts), just inlined here since this script only
+// ever needs getUsers, not the full player-context bundle. Try CrazyBet
+// first; only a confirmed 404 falls through to Arena365.
+async function getUsersAnyBrand(userId: string) {
+  try {
+    return await getUsers("crazybet", { userId });
+  } catch (err) {
+    if (err instanceof CrmApiError && err.status === 404) {
+      return await getUsers("arena365", { userId });
+    }
+    throw err;
+  }
+}
+
 // Second-source backfill for players.country, on top of
 // backfill-player-countries.ts (which only reads country from a real
 // user.registered event). This one calls the CRM's getUsers() live and
@@ -58,7 +74,7 @@ async function main() {
   for (const userId of stillUnknown) {
     let countryCode: string | undefined;
     try {
-      const { users } = await getUsers({ userId });
+      const { users } = await getUsersAnyBrand(userId);
       const user = users.find((u) => u._id === userId);
       if (!user) {
         console.log(`  ${userId}: CRM returned no matching user`);

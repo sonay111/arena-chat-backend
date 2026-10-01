@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import { pool } from "./db.js";
 import { webhooksRouter } from "./webhooks/index.js";
 import { getUsers, CrmIpNotAllowedError } from "./crm/index.js";
+import type { CrmBrand } from "./crm/index.js";
 import { alertsRouter, startWithdrawalDelayCheck, refreshAlertsRouter } from "./alerts/index.js";
 import { activityRouter } from "./activity/index.js";
 import { playersRouter } from "./players/index.js";
@@ -63,7 +64,7 @@ io.on("connection", (socket) => {
   console.log("someone connected:", socket.id);
 
   // A client asks to join — create a new conversation, or resume an existing one.
-  socket.on("join", async ({ playerId, lastMessageId }, ack) => {
+  socket.on("join", async ({ playerId, brand, lastMessageId }, ack) => {
     try {
       // Real identity verification: confirmed with Satyam that the widget
       // sends a plain Player ID, not a signed token. Trust doesn't come
@@ -72,9 +73,20 @@ io.on("connection", (socket) => {
       if (SKIP_IDENTITY_CHECK) {
         console.warn(`join: SKIP_IDENTITY_CHECK active — trusting playerId "${playerId}" without CRM verification`);
       } else {
+        // NEW requirement (2026-10-01): the CRM now requires a brand on
+        // every call, and nothing server-side can infer which brand a
+        // given playerId belongs to — whoever embeds the widget (Arena365's
+        // page vs CrazyBet's page) is the one place that genuinely knows.
+        // Rejecting outright rather than guessing a default.
+        if (brand !== "arena365" && brand !== "crazybet") {
+          console.error(`join rejected: missing or invalid brand "${brand}" for playerId "${playerId}"`);
+          if (ack) ack({ ok: false, reason: "missing or invalid brand" });
+          return;
+        }
+
         let verifiedPlayer;
         try {
-          const { users } = await getUsers({ userId: playerId, limit: 1 });
+          const { users } = await getUsers(brand as CrmBrand, { userId: playerId, limit: 1 });
           verifiedPlayer = users.find((u) => u._id === playerId);
         } catch (err) {
           if (err instanceof CrmIpNotAllowedError) {

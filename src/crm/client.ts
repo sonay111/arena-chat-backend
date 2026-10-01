@@ -3,6 +3,17 @@ import { CrmApiError, mapCrmError } from "./errors.js";
 
 export type CrmQueryParams = Record<string, string | number | undefined>;
 
+// Confirmed by Satyam (2026-10-01): the CRM API is now shared across
+// brands on one base URL/token, and requires x-tenant-domain on every
+// request to say which brand a call is for. Values confirmed directly —
+// not guessed.
+export type CrmBrand = "arena365" | "crazybet";
+
+const TENANT_DOMAINS: Record<CrmBrand, string> = {
+  arena365: "arena365.com",
+  crazybet: "crazybet.vgb2b.com",
+};
+
 function getBaseUrl(): string {
   const baseUrl = process.env.CRM_API_BASE_URL;
   if (!baseUrl) {
@@ -35,7 +46,15 @@ function buildUrl(path: string, params: CrmQueryParams): string {
 // endpoints.ts goes through this — it's the one place that knows about
 // auth, base URL, and how to turn the doc's three documented error bodies
 // into distinguishable exceptions.
-export async function crmGet<T = unknown>(path: string, params: CrmQueryParams = {}): Promise<T> {
+//
+// brand is required, not optional/defaulted — there is no safe default
+// brand to silently fall back to now that the CRM is shared across
+// Arena365 and CrazyBet; every caller must say which one it means.
+export async function crmGet<T = unknown>(
+  path: string,
+  brand: CrmBrand,
+  params: CrmQueryParams = {}
+): Promise<T> {
   const url = buildUrl(path, params);
   const token = getToken();
 
@@ -46,6 +65,7 @@ export async function crmGet<T = unknown>(path: string, params: CrmQueryParams =
       headers: {
         "Content-Type": "application/json",
         "x-crm-token": token,
+        "x-tenant-domain": TENANT_DOMAINS[brand],
       },
     });
   } catch (err) {

@@ -1,13 +1,13 @@
 import { pool } from "../db.js";
-import { getPlayerContext } from "../crm/index.js";
+import { getPlayerContextAnyBrand } from "../crm/index.js";
 import type { PlayerContext } from "../crm/index.js";
 
-export const DELAY_THRESHOLD_MINUTES = 10;
+export const DELAY_THRESHOLD_MINUTES = 2;
 
 export type WithdrawalDelayAlert = {
   paymentId: string;
   userId: string;
-  player: PlayerContext;
+  player: PlayerContext | null;
 };
 
 // Checks for withdrawals stuck past DELAY_THRESHOLD_MINUTES and not yet
@@ -17,14 +17,24 @@ export type WithdrawalDelayAlert = {
 //
 // fetchPlayerContext is injectable so tests can stub it out — real CRM
 // calls fail with CrmIpNotAllowedError until our server's IP is
-// allowlisted (see src/crm/errors.ts).
+// allowlisted (see src/crm/errors.ts). Defaults to getPlayerContextAnyBrand
+// (not getPlayerContext directly) since withdrawal webhooks carry no brand
+// signal — see src/crm/player-context.ts for the CrazyBet-then-Arena365
+// fallback this performs.
 //
-// Order matters: a withdrawal is only marked flagged_delayed=true AFTER its
-// player context has been fetched and saved. If the CRM lookup fails right
-// now (the expected current state), the row is left unflagged so the next
-// run retries it — flagging first would silently drop the alert forever.
+// CRM enrichment is best-effort, not required to flag: a withdrawal is
+// flagged (and alerted) even if CRM lookup fails, with player left null.
+// This used to block flagging entirely so the next run would retry — but
+// a CrazyBet userId will NEVER exist in Arena365's CRM (confirmed by
+// Satyam, 2026-09-30 investigation), so for CrazyBet withdrawals retrying
+// forever was not "waiting out a transient failure," it was permanently
+// never flagging at all, which also meant the planned Pay777 messaging
+// wire-up could never fire. Flagging immediately does mean a withdrawal
+// hit by a genuinely transient Arena365 CRM failure (e.g. CrmIpNotAllowedError)
+// now gets player: null permanently too, instead of eventually getting
+// real enrichment on a later retry — a real trade-off, not a free fix.
 export async function checkWithdrawalDelays(
-  fetchPlayerContext: (userId: string) => Promise<PlayerContext> = getPlayerContext
+  fetchPlayerContext: (userId: string) => Promise<PlayerContext> = getPlayerContextAnyBrand
 ): Promise<WithdrawalDelayAlert[]> {
   const { rows: candidates } = await pool.query<{ id: string; user_id: string }>(
     `SELECT id, user_id
@@ -39,15 +49,15 @@ export async function checkWithdrawalDelays(
   const alerts: WithdrawalDelayAlert[] = [];
 
   for (const candidate of candidates) {
-    let player: PlayerContext;
+    let player: PlayerContext | null;
     try {
       player = await fetchPlayerContext(candidate.user_id);
     } catch (err) {
       console.error(
-        `withdrawal-delay: CRM lookup failed for user ${candidate.user_id}, will retry next check:`,
+        `withdrawal-delay: CRM lookup failed for user ${candidate.user_id}, flagging without enrichment:`,
         err
       );
-      continue;
+      player = null;
     }
 
     // Guards against double-flagging if a run ever overlaps the previous one.

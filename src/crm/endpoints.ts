@@ -1,4 +1,5 @@
 import { crmGet } from "./client.js";
+import type { CrmBrand } from "./client.js";
 import type {
   Pagination,
   CrmUser,
@@ -12,6 +13,19 @@ import type {
 
 type PageParams = { page?: number; limit?: number };
 type DateRangeParams = { start_date?: string; end_date?: string };
+
+// OPEN DESIGN QUESTION, not resolved here (2026-10-01): the "all-X"
+// functions below (getAllDepositHistory, getAllWithdrawalHistory,
+// getAllSportsbookData, getAllUnsettledBets, getAllCasinoData,
+// getAllActiveBonuses, getLiveMatches) query across every player with no
+// single userId to hang a brand on. Now that every CRM call must declare
+// one tenant, it's unclear whether "all" should mean "all for one brand
+// per call" (requiring callers to run it once per brand and merge) or
+// something else. Deliberately NOT guessing an answer — these all
+// continue to query Arena365 only, same as before this change, until that
+// design question is resolved. CrazyBet data is NOT included in any of
+// these today.
+const ALL_X_PLACEHOLDER_BRAND: CrmBrand = "arena365";
 
 // Section APIs (deposit/withdrawal/sportsbook/casino/bonuses), and now
 // get-users too (confirmed 2026-09-10, see below), nest pagination inside
@@ -50,21 +64,23 @@ export function parseGetUsersResponse(json: GetUsersResponse): { users: CrmUser[
 // to filter to that one user (see getPlayerContext below, which depends
 // on it).
 export async function getUsers(
+  brand: CrmBrand,
   params: PageParams & { userId?: string } = {}
 ): Promise<{ users: CrmUser[]; pagination: Pagination }> {
-  const json = await crmGet<GetUsersResponse>("/crm/get-users", params);
+  const json = await crmGet<GetUsersResponse>("/crm/get-users", brand, params);
   return parseGetUsersResponse(json);
 }
 
 export async function getDepositHistory(
   userId: string,
+  brand: CrmBrand,
   params: PageParams & { payment_status?: string } & DateRangeParams = {}
 ): Promise<{
   deposits: PaymentTransaction[];
   pagination: Pagination;
   summary: { numberOfDeposits: number; totalDepositAmount: number; averageDepositAmount: number };
 }> {
-  const json = await crmGet<{ data: any }>(`/crm/deposit-history/${userId}`, params);
+  const json = await crmGet<{ data: any }>(`/crm/deposit-history/${userId}`, brand, params);
   return {
     deposits: json.data.depositTransactionsHistory,
     pagination: toPagination(json.data),
@@ -78,13 +94,14 @@ export async function getDepositHistory(
 
 export async function getWithdrawalHistory(
   userId: string,
+  brand: CrmBrand,
   params: PageParams & { payment_status?: string } & DateRangeParams = {}
 ): Promise<{
   withdrawals: PaymentTransaction[];
   pagination: Pagination;
   summary: { numberOfWithdrawals: number; totalWithdrawalAmount: number; averageWithdrawalAmount: number };
 }> {
-  const json = await crmGet<{ data: any }>(`/crm/withdrawal-history/${userId}`, params);
+  const json = await crmGet<{ data: any }>(`/crm/withdrawal-history/${userId}`, brand, params);
   return {
     withdrawals: json.data.withdrawalTransactionsHistory,
     pagination: toPagination(json.data),
@@ -98,9 +115,10 @@ export async function getWithdrawalHistory(
 
 export async function getSportsbookData(
   userId: string,
+  brand: CrmBrand,
   params: PageParams & { bet_status?: string } & DateRangeParams = {}
 ): Promise<{ bets: SportsbookBet[]; pagination: Pagination; summary: BetSummary }> {
-  const json = await crmGet<{ data: any }>(`/crm/sportsbook-data/${userId}`, params);
+  const json = await crmGet<{ data: any }>(`/crm/sportsbook-data/${userId}`, brand, params);
   return {
     bets: json.data.betHistory,
     pagination: toPagination(json.data),
@@ -116,9 +134,10 @@ export async function getSportsbookData(
 
 export async function getCasinoData(
   userId: string,
+  brand: CrmBrand,
   params: PageParams & { status?: string } & DateRangeParams = {}
 ): Promise<{ sessions: CasinoSession[]; pagination: Pagination; summary: BetSummary }> {
-  const json = await crmGet<{ data: any }>(`/crm/casino-data/${userId}`, params);
+  const json = await crmGet<{ data: any }>(`/crm/casino-data/${userId}`, brand, params);
   return {
     sessions: json.data.gameHistory,
     pagination: toPagination(json.data),
@@ -134,9 +153,10 @@ export async function getCasinoData(
 
 export async function getActiveBonuses(
   userId: string,
+  brand: CrmBrand,
   params: PageParams = {}
 ): Promise<{ bonuses: ActiveBonus[]; pagination: Pagination }> {
-  const json = await crmGet<{ data: any }>(`/crm/active-bonuses/${userId}`, params);
+  const json = await crmGet<{ data: any }>(`/crm/active-bonuses/${userId}`, brand, params);
   return {
     bonuses: json.data.activeBonuses,
     pagination: toPagination(json.data),
@@ -154,7 +174,7 @@ export async function getAllDepositHistory(
   pagination: Pagination;
   summary: { numberOfDeposits: number; totalDepositAmount: number; averageDepositAmount: number };
 }> {
-  const json = await crmGet<{ data: any }>("/crm/all-deposit-history", params);
+  const json = await crmGet<{ data: any }>("/crm/all-deposit-history", ALL_X_PLACEHOLDER_BRAND, params);
   return {
     deposits: json.data.depositTransactionsHistory,
     pagination: toPagination(json.data),
@@ -173,7 +193,7 @@ export async function getAllWithdrawalHistory(
   pagination: Pagination;
   summary: { numberOfWithdrawals: number; totalWithdrawalAmount: number; averageWithdrawalAmount: number };
 }> {
-  const json = await crmGet<{ data: any }>("/crm/all-withdrawal-history", params);
+  const json = await crmGet<{ data: any }>("/crm/all-withdrawal-history", ALL_X_PLACEHOLDER_BRAND, params);
   return {
     withdrawals: json.data.withdrawalTransactionsHistory,
     pagination: toPagination(json.data),
@@ -191,7 +211,7 @@ export async function getAllWithdrawalHistory(
 export async function getAllSportsbookData(
   params: PageParams & { bet_status?: string } & DateRangeParams = {}
 ): Promise<{ bets: SportsbookBet[]; pagination: Pagination; summary: BetSummary }> {
-  const json = await crmGet<{ data: any }>("/crm/all-sportsbook-data", params);
+  const json = await crmGet<{ data: any }>("/crm/all-sportsbook-data", ALL_X_PLACEHOLDER_BRAND, params);
   return {
     bets: json.data.betHistory,
     pagination: toPagination(json.data),
@@ -214,9 +234,10 @@ export async function getAllSportsbookData(
 // param needed or accepted, since this endpoint is already filtered server-side.
 export async function getUnsettledBets(
   userId: string,
+  brand: CrmBrand,
   params: PageParams = {}
 ): Promise<{ bets: SportsbookBet[]; pagination: Pagination; summary: BetSummary }> {
-  const json = await crmGet<{ data: any }>(`/crm/unsettled-bets/${userId}`, params);
+  const json = await crmGet<{ data: any }>(`/crm/unsettled-bets/${userId}`, brand, params);
   return {
     bets: json.data.betHistory,
     pagination: toPagination(json.data),
@@ -233,7 +254,7 @@ export async function getUnsettledBets(
 export async function getAllUnsettledBets(
   params: PageParams = {}
 ): Promise<{ bets: SportsbookBet[]; pagination: Pagination; summary: BetSummary }> {
-  const json = await crmGet<{ data: any }>("/crm/all-unsettled-bets", params);
+  const json = await crmGet<{ data: any }>("/crm/all-unsettled-bets", ALL_X_PLACEHOLDER_BRAND, params);
   return {
     bets: json.data.betHistory,
     pagination: toPagination(json.data),
@@ -255,7 +276,7 @@ export async function getAllUnsettledBets(
 export async function getAllCasinoData(
   params: PageParams & { status?: string } & DateRangeParams = {}
 ): Promise<{ sessions: CasinoSession[]; pagination: Pagination; summary: BetSummary }> {
-  const json = await crmGet<{ data: any }>("/crm/all-casino-data", params);
+  const json = await crmGet<{ data: any }>("/crm/all-casino-data", ALL_X_PLACEHOLDER_BRAND, params);
   return {
     sessions: json.data.gameHistory,
     pagination: toPagination(json.data),
@@ -272,7 +293,7 @@ export async function getAllCasinoData(
 export async function getAllActiveBonuses(
   params: PageParams = {}
 ): Promise<{ bonuses: ActiveBonus[]; pagination: Pagination }> {
-  const json = await crmGet<{ data: any }>("/crm/all-active-bonuses", params);
+  const json = await crmGet<{ data: any }>("/crm/all-active-bonuses", ALL_X_PLACEHOLDER_BRAND, params);
   return {
     bonuses: json.data.activeBonuses,
     pagination: toPagination(json.data),
@@ -297,6 +318,9 @@ export function parseLiveMatchesResponse(json: { data: GetLiveMatchesResponse })
 }
 
 export async function getLiveMatches(): Promise<GetLiveMatchesResponse> {
-  const json = await crmGet<{ status: boolean; message: string; data: GetLiveMatchesResponse }>("/crm/live-matches");
+  const json = await crmGet<{ status: boolean; message: string; data: GetLiveMatchesResponse }>(
+    "/crm/live-matches",
+    ALL_X_PLACEHOLDER_BRAND
+  );
   return parseLiveMatchesResponse(json);
 }

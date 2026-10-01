@@ -2,6 +2,10 @@
 <script>
   const socket = io("http://localhost:4000");
   const playerId = new URLSearchParams(location.search).get("playerId") || "player_1";
+  // NEW (2026-10-01): join now requires a brand, since the CRM can no
+  // longer infer it server-side. ?brand=crazybet in the URL to test that
+  // tenant; defaults to arena365.
+  const brand = new URLSearchParams(location.search).get("brand") || "arena365";
   let conversationId;
   let lastMessageId; // highest message id this client has already seen
 
@@ -9,8 +13,8 @@
   // reconnect, so joining here (instead of once at the top) is what makes
   // reconnection replay actually happen.
   socket.on("connect", () => {
-    console.log(`connected (${socket.id}) - joining with lastMessageId=${lastMessageId}`);
-    socket.emit("join", { playerId, lastMessageId }, (res) => {
+    console.log(`connected (${socket.id}) - joining with brand=${brand} lastMessageId=${lastMessageId}`);
+    socket.emit("join", { playerId, brand, lastMessageId }, (res) => {
       conversationId = res.conversationId;
       console.log("joined as", playerId, "-> conversation", conversationId, "status:", res.status);
     });

@@ -58,7 +58,7 @@ All of these live in `.env` (gitignored, never committed). `.env.example` has th
 |---|---|---|
 | `DATABASE_URL` | Postgres connection string. Local: `postgres://postgres:postgres@localhost:5433/chatdb`. In AWS: the RDS connection string. | Yes in production (RDS credentials); the local default is a throwaway dev password. |
 | `WEBHOOK_SHARED_SECRET` | Optional check against an `x-webhook-secret` header on incoming CRM webhooks (see `src/webhooks/auth.ts`). Leave empty to skip the check — this is a placeholder until the platform team confirms their real signing method. | Yes, once set to a real value. |
-| `CRM_API_BASE_URL` | Base URL for the platform's CRM API (e.g. `https://adminapistg.arena365backend.com/v1` on staging). Differs between staging and production. | No (not sensitive by itself, but keep it in `.env` since it changes per environment). |
+| `CRM_API_BASE_URL` | Base URL for the platform's CRM API. As of 2026-10-01, one shared production URL (`https://adminapip.arena365backend.com/v1`) across all brands — brand is now selected per-request via the `x-tenant-domain` header (`src/crm/client.ts`'s `CrmBrand`), not a separate base URL. | No (not sensitive by itself, but keep it in `.env`). |
 | `CRM_API_TOKEN` | Auth token for the CRM API, sent as the `x-crm-token` header. | **Yes — never commit this.** |
 
 If a token contains special characters (`#`, `"`, etc.), quote it in `.env` — `dotenv` treats an unquoted `#` as a comment marker and will silently truncate the value. Wrap the whole value in single quotes if it contains any of those.
@@ -102,7 +102,7 @@ There's no test suite for the chat/Socket.io flow yet — `test-client.html` is 
 ## Deployment notes
 
 - Intended to run in **AWS**, using **RDS Postgres** as the database (local Docker Postgres is dev-only).
-- `DATABASE_URL` and the two `CRM_API_*` variables are the only things that change between staging and production — everything else about the code is identical. Set them via `.env` (or your deployment platform's secret manager) per environment, never hardcode.
+- `DATABASE_URL` changes between staging and production — everything else about the code is identical. `CRM_API_BASE_URL`/`CRM_API_TOKEN` are now shared across brands and environments (see above); brand is selected per-request, not per-environment. Set via `.env` (or your deployment platform's secret manager), never hardcode.
 - Once deployed, this service will have a **static public IP** that needs to be shared with the platform team so they can **allowlist it** for CRM API access — without that, all CRM API calls fail (see above).
 - No `PORT` env var exists yet — port 4000 is hardcoded in `src/server.ts`. If your deployment needs a configurable port, that's a small change worth making before going live.
 

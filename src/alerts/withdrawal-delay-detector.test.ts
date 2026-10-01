@@ -1,7 +1,8 @@
-import { test, after } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { pool } from "../db.js";
-import { checkWithdrawalDelays } from "./withdrawal-delay-detector.js";
+import { checkWithdrawalDelays, DELAY_THRESHOLD_MINUTES } from "./withdrawal-delay-detector.js";
+import { CrmApiError } from "../crm/index.js";
 import type { PlayerContext } from "../crm/index.js";
 
 // Real end-to-end tests against the actual dev Postgres (same convention as
@@ -10,28 +11,59 @@ import type { PlayerContext } from "../crm/index.js";
 // server's IP is allowlisted (see src/crm/errors.ts), so a fake fetcher
 // stands in and records how many times/with what userId it was called.
 
+// checkWithdrawalDelays has no per-test scoping on its candidate query — any
+// other real eligible withdrawal sitting in the table when this suite runs
+// gets processed too. Before 2026-10-01, an unexpected userId's fetcher
+// throw was harmless: a thrown error left the row unflagged. Since CRM
+// failure now flags anyway (player: null), that's no longer true — a thrown
+// error would now permanently flag a real row this suite doesn't own. So
+// this suite snapshots every real (non-test) eligible row's flagged_delayed
+// state before running and restores it after, regardless of what happened
+// during the run — running this suite must never permanently mutate real
+// shared-DB data.
+let preExistingRealRowIds: string[] = [];
+
+before(async () => {
+  const { rows } = await pool.query<{ id: string }>(
+    `SELECT id FROM payments
+     WHERE payment_type = 'withdrawal' AND flagged_delayed = false
+       AND status IS DISTINCT FROM 'completed'
+       AND created_at < now() - (10 * INTERVAL '1 minute')`
+  );
+  preExistingRealRowIds = rows.map((r) => r.id);
+});
+
 after(async () => {
+  if (preExistingRealRowIds.length > 0) {
+    await pool.query(`UPDATE payments SET flagged_delayed = false WHERE id = ANY($1)`, [preExistingRealRowIds]);
+    await pool.query(`DELETE FROM withdrawal_delay_alerts WHERE payment_id = ANY($1)`, [preExistingRealRowIds]);
+  }
   await pool.end();
 });
 
-// Real detector, shared dev DB, no per-test scoping on the candidate query
-// (see checkWithdrawalDelays) — so if any other eligible withdrawal is
-// sitting in the table when these tests run, this fetcher would get called
-// for it too. Restricting to exactly the userIds these tests create means
-// an unexpected call throws instead of silently "succeeding" and enriching
-// a row this test didn't create — the detector's own "CRM failed, skip,
-// leave unflagged" path handles that safely.
+// Restricting the fake fetcher to exactly the userIds this suite creates
+// means an unexpected call throws loudly (test-isolation bug, e.g. a real
+// row slipping into an assertion) instead of silently succeeding — the
+// before/after snapshot above is what actually keeps real rows safe now,
+// this is just a correctness tripwire for the suite's own assertions.
 const KNOWN_TEST_USER_IDS = new Set([
   "TEST_USER_UNDER_10",
   "TEST_USER_OVER_10_PENDING",
   "TEST_USER_COMPLETED",
   "TEST_USER_NO_DOUBLE_FLAG",
+  "TEST_USER_CRM_FAILS",
 ]);
 
 function fakePlayerContextFetcher() {
   const calls: Record<string, number> = {};
   const fetcher = async (userId: string): Promise<PlayerContext> => {
     calls[userId] = (calls[userId] ?? 0) + 1;
+    // Simulates a real CRM failure (e.g. a CrazyBet userId 404ing against
+    // Arena365's CRM) for one specific test userId, to exercise the
+    // flag-without-enrichment path.
+    if (userId === "TEST_USER_CRM_FAILS") {
+      throw new CrmApiError("User not found", 404);
+    }
     if (!KNOWN_TEST_USER_IDS.has(userId)) {
       throw new Error(
         `fakePlayerContextFetcher called with unexpected userId "${userId}" — refusing to ` +
@@ -61,10 +93,10 @@ async function cleanupWithdrawal(id: string) {
   await pool.query("DELETE FROM payments WHERE id = $1", [id]);
 }
 
-test("a withdrawal under 10 minutes old is not flagged", async () => {
+test("a withdrawal under DELAY_THRESHOLD_MINUTES old is not flagged", async () => {
   const id = "test_wd_under_10";
   const userId = "TEST_USER_UNDER_10";
-  await insertTestWithdrawal(id, userId, "progress", 5);
+  await insertTestWithdrawal(id, userId, "progress", DELAY_THRESHOLD_MINUTES / 2);
   const { fetcher } = fakePlayerContextFetcher();
 
   await checkWithdrawalDelays(fetcher);
@@ -78,10 +110,10 @@ test("a withdrawal under 10 minutes old is not flagged", async () => {
   await cleanupWithdrawal(id);
 });
 
-test("a withdrawal over 10 minutes old and still pending is flagged, with player data attached", async () => {
+test("a withdrawal over DELAY_THRESHOLD_MINUTES old and still pending is flagged, with player data attached", async () => {
   const id = "test_wd_over_10_pending";
   const userId = "TEST_USER_OVER_10_PENDING";
-  await insertTestWithdrawal(id, userId, "progress", 15);
+  await insertTestWithdrawal(id, userId, "progress", DELAY_THRESHOLD_MINUTES + 10);
   const { fetcher, calls } = fakePlayerContextFetcher();
 
   const alerts = await checkWithdrawalDelays(fetcher);
@@ -89,7 +121,7 @@ test("a withdrawal over 10 minutes old and still pending is flagged, with player
   assert.equal(calls[userId], 1);
   const alert = alerts.find((a) => a.paymentId === id);
   assert.ok(alert, "expected an alert for the newly-flagged withdrawal");
-  assert.equal(alert!.player.identity?._id, userId);
+  assert.equal(alert!.player?.identity?._id, userId);
 
   const { rows } = await pool.query("SELECT flagged_delayed FROM payments WHERE id = $1", [id]);
   assert.equal(rows[0].flagged_delayed, true);
@@ -139,6 +171,29 @@ test("a withdrawal is never flagged or alerted twice", async () => {
     [id]
   );
   assert.equal(alertCount.rows[0].count, 1);
+
+  await cleanupWithdrawal(id);
+});
+
+test("a withdrawal is flagged even when CRM lookup fails, with player left null (2026-10-01 change)", async () => {
+  const id = "test_wd_crm_fails";
+  const userId = "TEST_USER_CRM_FAILS";
+  await insertTestWithdrawal(id, userId, "progress", 15);
+  const { fetcher, calls } = fakePlayerContextFetcher();
+
+  const alerts = await checkWithdrawalDelays(fetcher);
+
+  assert.equal(calls[userId], 1);
+  const alert = alerts.find((a) => a.paymentId === id);
+  assert.ok(alert, "expected an alert even though CRM enrichment failed");
+  assert.equal(alert!.player, null);
+
+  const { rows } = await pool.query("SELECT flagged_delayed FROM payments WHERE id = $1", [id]);
+  assert.equal(rows[0].flagged_delayed, true, "must flag despite CRM failure — a CrazyBet userId will never exist in Arena365's CRM");
+
+  const stored = await pool.query("SELECT player_context FROM withdrawal_delay_alerts WHERE payment_id = $1", [id]);
+  assert.equal(stored.rowCount, 1);
+  assert.equal(stored.rows[0].player_context, null);
 
   await cleanupWithdrawal(id);
 });
