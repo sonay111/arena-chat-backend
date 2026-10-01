@@ -42,7 +42,19 @@ export function verifyWebhookSignature(req: Request, res: Response, next: NextFu
   const provided = req.header("X-Webhook-Signature");
   const rawBody = req.rawBodyBuffer;
 
-  if (!rawBody || !isValidSignature(rawBody, provided, getSigningSecret())) {
+  // TEMPORARY DIAGNOSTIC LOGGING (2026-10-01) — investigating why every
+  // structured table (payments/bets/bonuses/players) stopped receiving
+  // writes around Sep 28-30 while raw_webhook_events kept logging
+  // normally. Suspect this gate is silently 401ing everything. Remove
+  // once root-caused. Never logs the secret or the full signature value.
+  const valid = !!rawBody && isValidSignature(rawBody, provided, getSigningSecret());
+  console.error(
+    `[SIG-DEBUG] path=${req.path} valid=${valid} hasRawBody=${!!rawBody} ` +
+    `rawBodyLen=${rawBody?.length ?? 0} providedHeaderPresent=${!!provided} ` +
+    `providedLen=${provided?.length ?? 0}`
+  );
+
+  if (!valid) {
     return res.status(401).json({ error: "unauthorized" });
   }
 
