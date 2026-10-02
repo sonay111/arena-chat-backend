@@ -6,12 +6,13 @@ import { claimMessageId as claimMessageIdDefault } from "./idempotency.js";
 import { getConversationMessages as getConversationMessagesDefault, sendMessage as sendMessageDefault } from "./endpoints.js";
 import type { SupportChatMessage, SendMessageOptions } from "./endpoints.js";
 import { SupportChatApiError } from "./errors.js";
+import { forwardToCxAgent as forwardToCxAgentDefault } from "./cx-agent-forward.js";
 
 // handleCustomerMessageReceived, claimMessageId, fetchConversationMessages,
-// and sendSupportChatMessage are all injectable so tests can stub them out
-// without needing a real downstream consumer, a real database, or a live
-// call to the external Support Chat API — same DI convention as every
-// other router in this project.
+// sendSupportChatMessage, and forwardToCxAgent are all injectable so tests
+// can stub them out without needing a real downstream consumer, a real
+// database, or a live call to the external Support Chat API / cx-agent —
+// same DI convention as every other router in this project.
 export function createSupportChatRouter(
   handleCustomerMessageReceived: (event: SupportChatWebhookEvent) => Promise<void> | void = async () => {},
   claimMessageId: (messageId: string) => Promise<boolean> = claimMessageIdDefault,
@@ -20,7 +21,8 @@ export function createSupportChatRouter(
     limit?: number,
     before?: string
   ) => Promise<SupportChatMessage[]> = getConversationMessagesDefault,
-  sendSupportChatMessage: (options: SendMessageOptions) => Promise<SupportChatMessage> = sendMessageDefault
+  sendSupportChatMessage: (options: SendMessageOptions) => Promise<SupportChatMessage> = sendMessageDefault,
+  forwardToCxAgent: (event: SupportChatWebhookEvent) => Promise<void> | void = forwardToCxAgentDefault
 ): Router {
   const router = Router();
 
@@ -53,6 +55,10 @@ export function createSupportChatRouter(
           // but the handler doesn't run a second time.
           const isNewMessage = await claimMessageId(messageId);
           if (isNewMessage) {
+            // Not awaited — a slow/unreachable cx-agent must never delay
+            // or fail the 200 we owe CrazyBet for this webhook. Errors are
+            // caught and logged inside forwardToCxAgent itself.
+            void forwardToCxAgent(event);
             await handleCustomerMessageReceived(event);
           }
         }

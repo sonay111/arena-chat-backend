@@ -217,6 +217,78 @@ test("POST /support-chat/webhook: a stubbed claimMessageId returning false skips
   await new Promise<void>((resolve, reject) => stubServer.close((err) => (err ? reject(err) : resolve())));
 });
 
+test("POST /support-chat/webhook: a fresh message triggers exactly one forward to cx-agent, with the full event payload", async () => {
+  const app = express();
+  const forwardedCalls: SupportChatWebhookEvent[] = [];
+  app.use(createSupportChatRouter(
+    async () => {},
+    async () => true, // every message looks fresh
+    undefined,
+    undefined,
+    async (event) => {
+      forwardedCalls.push(event);
+    }
+  ));
+  const stubServer = http.createServer(app);
+  await new Promise<void>((resolve) => stubServer.listen(0, resolve));
+  const address = stubServer.address();
+  if (typeof address !== "object" || address === null) throw new Error("failed to bind");
+  const stubBaseUrl = `http://127.0.0.1:${address.port}`;
+
+  const bodyString = JSON.stringify({
+    event: "customer_message_received",
+    messageId: "msg-forward-fresh",
+    conversationId: "c1",
+    body: "hello",
+  });
+  try {
+    const { status } = await post(stubBaseUrl, bodyString, sign(bodyString));
+    assert.equal(status, 200);
+    assert.equal(forwardedCalls.length, 1);
+    assert.deepEqual(forwardedCalls[0], {
+      event: "customer_message_received",
+      messageId: "msg-forward-fresh",
+      conversationId: "c1",
+      body: "hello",
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => stubServer.close((err) => (err ? reject(err) : resolve())));
+  }
+});
+
+test("POST /support-chat/webhook: a duplicate delivery (idempotency check fails) is not forwarded to cx-agent", async () => {
+  const app = express();
+  const forwardedCalls: SupportChatWebhookEvent[] = [];
+  app.use(createSupportChatRouter(
+    async () => {},
+    async () => false, // simulate "already claimed", same convention as the existing stubbed-claim test above
+    undefined,
+    undefined,
+    async (event) => {
+      forwardedCalls.push(event);
+    }
+  ));
+  const stubServer = http.createServer(app);
+  await new Promise<void>((resolve) => stubServer.listen(0, resolve));
+  const address = stubServer.address();
+  if (typeof address !== "object" || address === null) throw new Error("failed to bind");
+  const stubBaseUrl = `http://127.0.0.1:${address.port}`;
+
+  const bodyString = JSON.stringify({
+    event: "customer_message_received",
+    messageId: "msg-forward-duplicate",
+    conversationId: "c1",
+    body: "hello again",
+  });
+  try {
+    const { status } = await post(stubBaseUrl, bodyString, sign(bodyString));
+    assert.equal(status, 200);
+    assert.equal(forwardedCalls.length, 0, "a duplicate (already-claimed) message must not be forwarded");
+  } finally {
+    await new Promise<void>((resolve, reject) => stubServer.close((err) => (err ? reject(err) : resolve())));
+  }
+});
+
 test("POST /support-chat/webhook: the real captured payload (first live delivery, 2026-09-29) is accepted and processed", async () => {
   // Literal payload captured via ngrok's request inspector from the first
   // real customer_message_received delivery. This is what exposed the
