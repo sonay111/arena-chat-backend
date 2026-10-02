@@ -261,6 +261,14 @@ CREATE TABLE IF NOT EXISTS bets (
 );
 CREATE INDEX IF NOT EXISTS idx_bets_user ON bets (user_id);
 
+-- Real sportsbook.bet_placed payloads carry a legs[] array (confirmed
+-- 2026-10-02) -- one entry for a single-selection bet, multiple for a
+-- parlay/multi-bet, each {odds, betName, matchId, marketName}. No prior
+-- column existed to store this at all. ALTER, not part of the original
+-- CREATE TABLE, since bets already existed in every environment that ran
+-- db:setup before this was discovered.
+ALTER TABLE bets ADD COLUMN IF NOT EXISTS legs JSONB;
+
 -- Bonus payload shape varies a lot by type (free bet, deposit %, free spin,
 -- cashback) and the doc's four examples don't even agree on the user id key
 -- (userId vs user_id) or whether "status" is present (cashback has none).

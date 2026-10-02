@@ -39,6 +39,10 @@ type BetRow = {
   session: string | null;
   created_at: string | null;
   updated_at: string | null;
+  // JSON-stringified legs[] array from the real payload, or null when
+  // absent (confirmed live: bet_settled events don't carry it at all,
+  // only bet_placed does -- see the COALESCE in the UPDATE clause below).
+  legs: string | null;
 };
 
 async function upsertBet(row: BetRow) {
@@ -50,10 +54,10 @@ async function upsertBet(row: BetRow) {
        bet_status, wallet_id,
        game_code, developer_code, bet_with_bonus, transaction_id,
        debit_transaction_id, credit_transaction_id, round, session,
-       created_at, updated_at
+       created_at, updated_at, legs
      )
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
      ON CONFLICT (id) DO UPDATE SET
        user_id               = EXCLUDED.user_id,
        category              = EXCLUDED.category,
@@ -84,7 +88,12 @@ async function upsertBet(row: BetRow) {
        credit_transaction_id = EXCLUDED.credit_transaction_id,
        round                 = EXCLUDED.round,
        session               = EXCLUDED.session,
-       updated_at            = EXCLUDED.updated_at`,
+       updated_at            = EXCLUDED.updated_at,
+       -- bet_settled doesn't carry legs at all (confirmed live) -- a plain
+       -- EXCLUDED.legs here would null out what bet_placed already stored
+       -- the moment a bet settles. Keep the existing value whenever the
+       -- incoming event doesn't provide one.
+       legs                  = COALESCE(EXCLUDED.legs, bets.legs)`,
     [
       row.id, row.user_id, row.category, row.amount, row.return_amount, row.status, row.bet_type, row.currency,
       row.match_id, row.market_id, row.market_name, row.result_string, row.team_name, row.bet_title,
@@ -92,7 +101,7 @@ async function upsertBet(row: BetRow) {
       row.bet_status, row.wallet_id,
       row.game_code, row.developer_code, row.bet_with_bonus, row.transaction_id,
       row.debit_transaction_id, row.credit_transaction_id, row.round, row.session,
-      row.created_at, row.updated_at,
+      row.created_at, row.updated_at, row.legs,
     ]
   );
 }
@@ -148,8 +157,12 @@ async function handleBetWebhook(routePath: string, req: Request, res: Response) 
       id: data._id,
       user_id: data.userId,
       category,
-      amount: data.amount ?? null,
-      return_amount: data.return_amount ?? null,
+      // Confirmed live 2026-10-02: the real field is stakeAmount, not
+      // amount -- data.amount never exists, so this was always landing
+      // null for every real sportsbook bet. Same bug, same fix, for
+      // returnAmount (was data.return_amount, also never real).
+      amount: data.stakeAmount ?? null,
+      return_amount: data.returnAmount ?? null,
       status: data.status ?? null,
       bet_type: data.bet_type ?? null,
       currency: data.currency ?? null,
@@ -177,6 +190,7 @@ async function handleBetWebhook(routePath: string, req: Request, res: Response) 
       session: data.session ?? null,
       created_at: data.createdAt ?? null,
       updated_at: data.updatedAt ?? null,
+      legs: Array.isArray(data.legs) ? JSON.stringify(data.legs) : null,
     });
 
     res.status(200).json({ ok: true });
