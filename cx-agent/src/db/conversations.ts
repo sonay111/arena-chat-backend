@@ -32,6 +32,17 @@ export async function getConversationsForPolling(): Promise<ConversationState[]>
   return (data ?? []) as ConversationState[];
 }
 
+// Every conversation a customer has, newest first. Used by the dispatcher's contact rule.
+export async function getConversationsForCustomer(customerId: string): Promise<ConversationState[]> {
+  const { data, error } = await supabase
+    .from('conversation_state')
+    .select('*')
+    .eq('customer_id', customerId)
+    .order('first_seen_at', { ascending: false });
+  if (error) throw new Error(`Supabase error (getConversationsForCustomer): ${error.message}`);
+  return (data ?? []) as ConversationState[];
+}
+
 export async function getKnownPaymentIds(paymentIds: string[]): Promise<Set<string>> {
   if (paymentIds.length === 0) return new Set();
   const { data, error } = await supabase

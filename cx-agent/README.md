@@ -82,10 +82,17 @@ src/
     supportChat.ts          send to the customer's widget (dry run, allowlist, id mapping)
   inbound/
     handleCustomerMessage.ts  read a reply, find the withdrawal, answer
+  dispatcher/
+    dispatcher.ts           plain-code loop: collect problems, follow up, open each new one once
+    types.ts                Case and Specialist: the shared vocabulary
+    contactPolicy.ts        don't hit a customer with two different problems at once
+  specialists/
+    withdrawal.ts           the Withdrawal & Cashier specialist (what to say, reminders, outcome)
+    shared.ts               helpers every specialist uses to message a customer
   feed/                     withdrawal feed, gateway health
   messages/templates.ts     fixed copy for clarifying questions
   orchestrator/
-    poll.ts                 poll cycle: new withdrawals, reminders, resolution
+    poll.ts                 runs one cycle: gateway health, then the dispatcher
     checkinPolicy.ts        when a reminder is due and what it may promise
   routes/
     supportChatInbound.ts   door for the backend's forwarder
@@ -97,16 +104,24 @@ src/
 
 ## Core flow
 
-1. **Poll** the feed every `POLL_INTERVAL_SECONDS`.
-2. **New withdrawal** (a `paymentId` not yet in `conversation_state`): create the
-   conversation, write a first message with Claude, send it to the customer's
-   widget, record it.
-3. **Reminders:** while still pending, a reminder every `CHECKIN_INTERVAL_MINUTES`,
-   at most `MAX_CHECKINS`. The agent only mentions a next check if one will happen.
-4. **Resolution:** when a withdrawal leaves the feed or changes status, the agent
-   tells the customer the honest outcome and marks the conversation resolved.
-5. **Replies:** the customer's message is translated, saved, answered by the agent,
-   and the answer is saved. There is no human gate: the agent answers every reply.
+The project reaches the customer **before** they contact support. A **dispatcher** (plain
+code, no AI) runs every `POLL_INTERVAL_SECONDS`:
+
+1. **Collect** the current problems from each specialist's signal (today: the delayed-
+   withdrawal feed). If a signal cannot be read, that specialist is skipped for the whole
+   cycle, so nothing is wrongly reported as resolved.
+2. **Follow up** each existing conversation with the specialist that owns its `category`:
+   reminders every `CHECKIN_INTERVAL_MINUTES` (at most `MAX_CHECKINS`), and the honest
+   outcome when the withdrawal leaves the feed or changes status.
+3. **Open** each genuinely new problem once: the specialist writes the first message with
+   Claude, it is sent to the customer's widget, and recorded. A new kind of problem for a
+   customer who was just messaged about something else waits
+   `DISPATCH_CROSS_TYPE_COOLDOWN_MINUTES`; the same kind is never delayed.
+4. **Replies:** the customer's message is translated, saved, answered by the agent, and the
+   answer is saved. There is no human gate: the agent answers every reply.
+
+Adding a new kind of problem = a new specialist (one file in `src/specialists/`, registered
+in `orchestrator/poll.ts`) with its own signal and its own verified facts.
 
 ## Wording rules (in `src/ai/drafts.ts`)
 
@@ -127,7 +142,7 @@ npm test
   Supabase `conversation_state` table but nothing reads or writes it.
 - `humanRoutes.ts` (take-control / release-control) is legacy; the agent does not
   depend on it.
-- The poll cycle re-checks every previously resolved conversation each time; worth
+- The dispatcher re-checks every previously resolved conversation each cycle; worth
   limiting to open or recently resolved ones.
 - `ConversationRole` in `src/types.ts` lacks `'human_agent'`, which `humanRoutes.ts`
   uses (type error in `tsc`).
