@@ -11,12 +11,16 @@ export async function fetchWithdrawalFeed(): Promise<FeedAlert[]> {
 
   // Every pending withdrawal is processed (detected, drafted, logged) regardless
   // of who it belongs to, so we can observe the whole flow for every customer.
-  // Actual delivery is still gated separately in resolveTelegramChatId/
-  // logAndMaybeSend: only TEST_USER_IDS get a real Telegram send today, since
-  // Telegram is a test-only channel. Real customers get everything processed
-  // and logged to conversation history, just not delivered anywhere yet
-  // (no live channel exists for them until the V3 integration lands).
-  return alerts;
+  // Whether a message is actually delivered is decided separately, in sendToCustomer
+  // (channels/supportChat.ts): only TEST_USER_IDS, unless SUPPORT_CHAT_ALLOW_ALL_CUSTOMERS
+  // is on, and only if the customer exists in Support Chat.
+  // Optional narrowing for tests: only act on the listed payment ids.
+  return filterAlertsByPaymentIds(alerts, config.testPaymentIds);
+}
+
+export function filterAlertsByPaymentIds(alerts: FeedAlert[], paymentIds: string[] | undefined): FeedAlert[] {
+  if (!paymentIds || paymentIds.length === 0) return alerts;
+  return alerts.filter((a) => paymentIds.includes(a.paymentId));
 }
 
 /**
@@ -78,28 +82,13 @@ export function getWithdrawalAgeMinutes(alert: FeedAlert, now: Date = new Date()
   return (now.getTime() - created) / 60000;
 }
 
-// --- Currency / payment-rail classification -------------------------------
-// This is the one spot to adjust if the feed's currency or paymentMethod
-// vocabulary changes. Fiat/bank rails get a concrete ETA; crypto, UPI and
-// e-wallet rails don't, because those settlement times vary too much to
-// honestly promise a window.
+// --- Timeframe -------------------------------------------------------------
 
-const FIAT_ETA_CURRENCIES = new Set(['INR', 'USD', 'EUR', 'GBP']);
-const NON_ETA_PAYMENT_METHODS = new Set(['crypto', 'upi', 'e-wallet', 'ewallet', 'wallet']);
-
-export function getEtaText(alert: FeedAlert): string | null {
-  const matched = findMatchingWithdrawal(alert);
-  const paymentMethod = matched?.paymentMethod?.toLowerCase().trim();
-  const currency = alert.currency?.toUpperCase().trim();
-
-  if (paymentMethod && NON_ETA_PAYMENT_METHODS.has(paymentMethod)) {
-    return null;
-  }
-  if (currency && FIAT_ETA_CURRENCIES.has(currency)) {
-    return '1-2 business days';
-  }
-  // Unknown or crypto-looking currency codes (e.g. usdttrc20, btc, eth): don't
-  // promise a timeframe we can't back up.
+export function getEtaText(_alert: FeedAlert): string | null {
+  // No timeframe is verified for any withdrawal yet, so none is ever returned: the agent must
+  // not tell a customer "1-2 business days" (or any window) that we cannot back up. This used to
+  // return '1-2 business days' for fiat currencies; that was a fixed rule, not real data.
+  // Return a real value here only once a verified source (e.g. provider SLA timers) exists.
   return null;
 }
 

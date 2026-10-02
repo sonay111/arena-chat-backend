@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { getConversationById, insertHistory, updateConversation } from '../db/conversations';
-import { sendTelegramMessage } from '../channels/telegram';
-import { resolveTelegramChatId } from '../config';
+import { sendToCustomer } from '../channels/supportChat';
 
 export const humanRouter = Router();
 
@@ -24,10 +23,7 @@ humanRouter.post('/take-control', async (req, res) => {
       return;
     }
 
-    const chatId = resolveTelegramChatId(convo.customer_id, convo.telegram_chat_id);
-    if (chatId) {
-      await sendTelegramMessage(String(chatId), message);
-    }
+    await sendToCustomer(convo.customer_id, message);
 
     const now = new Date().toISOString();
     await insertHistory({
@@ -73,37 +69,6 @@ humanRouter.post('/release-control', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Error in release-control', err);
-    res.status(500).json({ error: 'internal error' });
-  }
-});
-
-// NOTE: not part of the original spec. Nothing in the withdrawal feed carries a
-// Telegram chat id, so a new conversation only gets one by copying it forward
-// from an earlier conversation for the same customer_id. The very first time a
-// customer messages the bot, that link has to be established somehow — this
-// endpoint is a minimal manual way to do it (e.g. from an admin panel) until a
-// real linking flow exists. Safe to delete if you handle linking another way.
-humanRouter.post('/link-telegram', async (req, res) => {
-  try {
-    const { conversation_id, telegram_chat_id } = req.body as {
-      conversation_id?: string;
-      telegram_chat_id?: string;
-    };
-    if (!conversation_id || !telegram_chat_id) {
-      res.status(400).json({ error: 'conversation_id and telegram_chat_id are required' });
-      return;
-    }
-
-    const convo = await getConversationById(conversation_id);
-    if (!convo) {
-      res.status(404).json({ error: 'conversation not found' });
-      return;
-    }
-
-    await updateConversation(conversation_id, { telegram_chat_id });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Error in link-telegram', err);
     res.status(500).json({ error: 'internal error' });
   }
 });

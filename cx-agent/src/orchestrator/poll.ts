@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { resolveTelegramChatId } from '../config';
 import { ConversationState, ConversationRole } from '../types';
 import {
   fetchWithdrawalFeed,
@@ -14,7 +13,6 @@ import { FeedAlert } from '../feed/types';
 import {
   getConversationsForPolling,
   getKnownPaymentIds,
-  getMostRecentTelegramChatIdForCustomer,
   countOpenConversationsForCustomer,
   createConversation,
   updateConversation,
@@ -23,10 +21,12 @@ import {
   getScenarioContext,
   getHistoryForConversation,
 } from '../db/conversations';
-import { sendTelegramMessage } from '../channels/telegram';
-import { draftAgentMessage, WithdrawalStatus, CHECKIN_INTERVAL_MINUTES, HistoryMessage } from '../ai/drafts';
+import { sendToCustomer as sendSupportChatMessage, canMessageCustomer } from '../channels/supportChat';
+import { draftAgentMessage, WithdrawalStatus, HistoryMessage } from '../ai/drafts';
+import { shouldCheckIn, nextCheckInMinutes } from './checkinPolicy';
 import { translateFromEnglish, SupportedLanguage } from '../ai/translate';
 import { resolvedWhileTakenOverNote } from '../messages/templates';
+import { checkGatewayStatusChanges } from '../feed/serviceHealth';
 
 const APPROVED_SUBMITTED_PROGRESS_NOTE =
   'The withdrawal has been approved internally and submitted to the payment provider for confirmation. It is not yet complete — the provider still needs to confirm before it can be marked complete.';
@@ -56,11 +56,10 @@ async function logAndMaybeSend(params: {
   const { conversation, role, message, sendToCustomer, metadata } = params;
 
   if (sendToCustomer) {
-    const chatId = resolveTelegramChatId(conversation.customer_id, conversation.telegram_chat_id);
-    if (chatId) {
+    if (canMessageCustomer(conversation.customer_id)) {
       const targetLanguage = (conversation.customer_language ?? 'en') as SupportedLanguage;
       const localizedMessage = await translateFromEnglish(message, targetLanguage);
-      await sendTelegramMessage(String(chatId), localizedMessage);
+      await sendSupportChatMessage(conversation.customer_id, localizedMessage);
     }
   }
 
@@ -77,8 +76,6 @@ async function logAndMaybeSend(params: {
 async function handleNewWithdrawal(alert: FeedAlert, now: Date, allAlerts: FeedAlert[]): Promise<void> {
   const matched = findMatchingWithdrawal(alert);
   const etaText = getEtaText(alert);
-  const existingChatId = await getMostRecentTelegramChatIdForCustomer(alert.userId);
-  const telegramChatId = resolveTelegramChatId(alert.userId, existingChatId);
 
   const resolvedAmount = Number(alert.amount) || matched?.amount || null;
   const resolvedCurrency = alert.currency ?? matched?.currency ?? null;
@@ -95,7 +92,6 @@ async function handleNewWithdrawal(alert: FeedAlert, now: Date, allAlerts: FeedA
     currency: resolvedCurrency,
     customer_name: alert.player?.identity?.username ?? null,
     vip: null,
-    telegram_chat_id: telegramChatId,
     taken_over_by: null,
     checkin_count: 0,
     first_seen_at: alert.createdAt,
@@ -168,7 +164,7 @@ async function handleNewWithdrawal(alert: FeedAlert, now: Date, allAlerts: FeedA
     next_step_instructions: null,
     verified_timeframe: etaText,
     trigger_type: 'AUTOMATED_LOOP',
-    next_check_in_minutes: CHECKIN_INTERVAL_MINUTES,
+    next_check_in_minutes: nextCheckInMinutes(0),
     pending_update_count: 0,
     progress_update: initialProgressNote,
     has_multiple_open_withdrawals,
@@ -278,7 +274,7 @@ async function sendProgressUpdate(convo: ConversationState): Promise<void> {
     next_step_instructions: null,
     verified_timeframe: scenario?.eta_text ?? null,
     trigger_type: 'AUTOMATED_LOOP',
-    next_check_in_minutes: CHECKIN_INTERVAL_MINUTES,
+    next_check_in_minutes: nextCheckInMinutes(convo.checkin_count),
     pending_update_count: convo.pending_update_count,
     progress_update: APPROVED_SUBMITTED_PROGRESS_NOTE,
     has_multiple_open_withdrawals: openCount > 1,
@@ -302,7 +298,7 @@ async function maybeCheckin(convo: ConversationState, now: Date): Promise<void> 
 
   const minutesSinceLastMessage =
     (now.getTime() - new Date(convo.agent_last_message_at).getTime()) / 60000;
-  if (minutesSinceLastMessage < CHECKIN_INTERVAL_MINUTES) return;
+  if (!shouldCheckIn(convo.checkin_count, minutesSinceLastMessage)) return;
 
   const [scenario, history, openCount] = await Promise.all([
     getScenarioContext(convo.conversation_id),
@@ -320,7 +316,8 @@ async function maybeCheckin(convo: ConversationState, now: Date): Promise<void> 
     next_step_instructions: null,
     verified_timeframe: scenario?.eta_text ?? null,
     trigger_type: 'AUTOMATED_LOOP',
-    next_check_in_minutes: CHECKIN_INTERVAL_MINUTES,
+    // this reminder counts as sent; only promise another check if one will really follow
+    next_check_in_minutes: nextCheckInMinutes(convo.checkin_count + 1),
     pending_update_count: convo.pending_update_count,
     has_multiple_open_withdrawals: openCount > 1,
     message_history: history,
@@ -340,6 +337,10 @@ async function maybeCheckin(convo: ConversationState, now: Date): Promise<void> 
 export async function runPollCycle(): Promise<void> {
   console.log(`Poll cycle running at ${new Date().toISOString()}`);
   const now = new Date();
+
+  // Payment gateway health check — logs status changes only, no messaging yet
+  await checkGatewayStatusChanges();
+
   const alerts = await fetchWithdrawalFeed();
   const feedByPaymentId = new Map(alerts.map((a) => [a.paymentId, a]));
 
@@ -392,8 +393,8 @@ export async function runPollCycle(): Promise<void> {
 
       const stillPending = feedAlert ? feedAlert.status === 'pending' : false;
       // Logs every conversation the poller knows about — not gated by
-      // TEST_USER_IDS in any way. That setting only affects whether an
-      // actual Telegram message gets sent (resolveTelegramChatId), never
+      // TEST_USER_IDS in any way. That setting only affects whether a
+      // message actually gets delivered (canMessageCustomer), never
       // what's printed here. amount/currency/payment_id (used as the
       // customer-facing reference) are included so a withdrawal's details
       // are visible without cross-checking the Lovable dashboard.

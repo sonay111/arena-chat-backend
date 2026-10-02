@@ -15,13 +15,37 @@ function optionalEnv(name: string): string | undefined {
   return value && value.trim() !== '' ? value : undefined;
 }
 
+// "qaId:supportChatId,qaId2:supportChatId2" -> { qaId: supportChatId, ... }.
+// Lets a customer the agent knows under one id (e.g. a QA player from the
+// withdrawal feed) be reached in the Support Chat widget under a different id
+// (their CrazyBet user id). Malformed entries are skipped with a warning.
+function parseCustomerIdMap(raw: string | undefined): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const pair of (raw ?? '').split(',')) {
+    if (pair.trim() === '') continue;
+    const [from, to, ...extra] = pair.split(':').map((part) => part.trim());
+    if (!from || !to || extra.length > 0) {
+      console.warn(`SUPPORT_CHAT_CUSTOMER_MAP: skipping malformed entry ${JSON.stringify(pair)} (expected "id:id")`);
+      continue;
+    }
+    map[from] = to;
+  }
+  return map;
+}
+
 export const config = {
   supabaseUrl: requireEnv('SUPABASE_URL'),
   supabaseServiceKey: requireEnv('SUPABASE_SERVICE_KEY'),
   // Anthropic is the sole AI brain for all customer messaging (replaced Groq/OpenRouter).
   anthropicApiKey: requireEnv('ANTHROPIC_API_KEY'),
-  telegramBotToken: requireEnv('TELEGRAM_BOT_TOKEN'),
   withdrawalFeedUrl: requireEnv('WITHDRAWAL_FEED_URL'),
+
+  // TEST_PAYMENT_IDS: if set, the poller only acts on these payment (request) ids and
+  // ignores every other withdrawal in the feed. For testing one specific withdrawal.
+  testPaymentIds: optionalEnv('TEST_PAYMENT_IDS')
+    ?.split(',')
+    .map((id) => id.trim())
+    .filter(Boolean),
 
   // Optional testing/staging helpers.
   // TEST_USER_IDS: if set, the poller only acts on withdrawals whose userId is in this
@@ -30,43 +54,29 @@ export const config = {
     ?.split(',')
     .map((id) => id.trim())
     .filter(Boolean),
-  // TEST_TELEGRAM_CHAT_ID: fallback Telegram chat used ONLY for customers listed in
-  // TEST_USER_IDS when their conversation has no telegram_chat_id linked yet, so you
-  // can see your own test messages land somewhere. Never used for real customers.
-  testTelegramChatId: optionalEnv('TEST_TELEGRAM_CHAT_ID'),
+
+  // CBTF widget channel (the Support Chat API). All
+  // optional so the service still starts without them: without credentials
+  // (or without SUPPORT_CHAT_SEND=true) sendToCustomer only logs what it
+  // WOULD send. See channels/supportChat.ts.
+  supportChatApiBaseUrl: optionalEnv('SUPPORT_CHAT_API_BASE_URL'),
+  supportChatApiKey: optionalEnv('SUPPORT_CHAT_API_KEY'),
+  supportChatTenantDomain: optionalEnv('SUPPORT_CHAT_TENANT_DOMAIN'),
+  supportChatSendEnabled: optionalEnv('SUPPORT_CHAT_SEND') === 'true',
+  customerIdMap: parseCustomerIdMap(optionalEnv('SUPPORT_CHAT_CUSTOMER_MAP')),
+  // Opt-in: when exactly "true", ANY customer may be messaged (each withdrawal goes to its own
+  // owner's widget) instead of only the ids in TEST_USER_IDS. Support Chat itself refuses a
+  // customer that doesn't exist there. Leave off to keep the test-only safety list.
+  supportChatAllowAllCustomers: optionalEnv('SUPPORT_CHAT_ALLOW_ALL_CUSTOMERS') === 'true',
+
+  // Secret CrazyBet uses to sign customer-reply webhooks (X-Arena365-Signature) when they are
+  // delivered straight to POST /support-chat/webhook. Unset = that route refuses everything.
+  supportChatWebhookSecret: optionalEnv('SUPPORT_CHAT_WEBHOOK_SECRET'),
+
+  // Shared secret arena-chat-backend sends (x-cx-agent-secret) when it forwards a
+  // customer's widget message to POST /support-chat/inbound. Unset = route refuses everything.
+  inboundSecret: optionalEnv('CX_AGENT_INBOUND_SECRET'),
 
   port: Number(optionalEnv('PORT') ?? '3000'),
   pollIntervalSeconds: Number(optionalEnv('POLL_INTERVAL_SECONDS') ?? '30'),
 } as const;
-
-/**
- * Where to send an outbound message for this conversation, or null to skip sending.
- *
- * IMPORTANT: TEST_TELEGRAM_CHAT_ID is only ever used as a fallback for customers
- * explicitly listed in TEST_USER_IDS. A real customer with no telegram_chat_id
- * linked yet is a customer we have no channel for, not a test case — we must not
- * redirect their messages into the tester's personal chat. The check is "is this
- * customer_id a test user", never "is telegram_chat_id empty".
- *
- * SAFETY NET: even if a conversation row already has TEST_TELEGRAM_CHAT_ID stored
- * as its telegram_chat_id (e.g. from old/bad data created before this gating
- * existed, or any future bug that mislinks it), we refuse to use it unless the
- * customer is currently a listed test user. A non-test customer should never be
- * able to end up wired to the tester's personal chat, no matter how that value
- * got onto their row.
- */
-export function resolveTelegramChatId(customerId: string, telegramChatId: string | null): string | null {
-  const isTestUser = Boolean(config.testUserIds?.includes(customerId));
-
-  if (telegramChatId) {
-    if (telegramChatId === config.testTelegramChatId && !isTestUser) {
-      return null;
-    }
-    return telegramChatId;
-  }
-
-  if (config.testTelegramChatId && isTestUser) {
-    return config.testTelegramChatId;
-  }
-  return null;
-}

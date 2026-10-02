@@ -18,7 +18,6 @@ export interface ConversationState {
   currency: string | null;
   customer_name: string | null;
   vip: boolean | null;
-  telegram_chat_id: string | null;
   taken_over_by: string | null;
   checkin_count: number;
   first_seen_at: string | null;
@@ -40,6 +39,7 @@ export interface ConversationState {
 export interface ConversationHistoryRow {
   id?: string;
   conversation_id: string;
+  customer_id: string;
   role: ConversationRole;
   message: string;
   sent_at: string;
@@ -49,7 +49,12 @@ export interface ConversationHistoryRow {
 export interface ScenarioContextRow {
   id?: string;
   conversation_id: string;
-  scenario_key: string;
-  context: Record<string, unknown> | null;
+  customer_id: string;
+  event_type: string;
+  event_payload: Record<string, unknown> | null;
+  objective: string | null;
+  eta_text: string | null;
+  scenario_key?: string;
+  context?: Record<string, unknown> | null;
   created_at?: string;
 }

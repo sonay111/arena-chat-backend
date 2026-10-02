@@ -42,50 +42,15 @@ export async function getKnownPaymentIds(paymentIds: string[]): Promise<Set<stri
   return new Set((data ?? []).map((r: { payment_id: string }) => r.payment_id));
 }
 
-export async function getMostRecentTelegramChatIdForCustomer(customerId: string): Promise<string | null> {
+// Widget-channel lookups: a customer is identified by customer_id (their
+// Arena userId, which the Support Chat webhook carries) — no chat id to link.
+export async function getAllConversationsByCustomerId(customerId: string): Promise<ConversationState[]> {
   const { data, error } = await supabase
     .from('conversation_state')
-    .select('telegram_chat_id')
+    .select('*')
     .eq('customer_id', customerId)
-    .not('telegram_chat_id', 'is', null)
-    .order('first_seen_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(`Supabase error (getMostRecentTelegramChatIdForCustomer): ${error.message}`);
-  return data?.telegram_chat_id ?? null;
-}
-
-export async function getOpenConversationByTelegramChatId(chatId: string): Promise<ConversationState | null> {
-  const { data, error } = await supabase
-    .from('conversation_state')
-    .select('*')
-    .eq('telegram_chat_id', chatId)
-    .neq('status', 'resolved')
-    .order('first_seen_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(`Supabase error (getOpenConversationByTelegramChatId): ${error.message}`);
-  return (data as ConversationState) ?? null;
-}
-
-export async function getOpenConversationsByTelegramChatId(chatId: string): Promise<ConversationState[]> {
-  const { data, error } = await supabase
-    .from('conversation_state')
-    .select('*')
-    .eq('telegram_chat_id', chatId)
-    .neq('status', 'resolved')
     .order('first_seen_at', { ascending: false });
-  if (error) throw new Error(`Supabase error (getOpenConversationsByTelegramChatId): ${error.message}`);
-  return (data ?? []) as ConversationState[];
-}
-
-export async function getAllConversationsByTelegramChatId(chatId: string): Promise<ConversationState[]> {
-  const { data, error } = await supabase
-    .from('conversation_state')
-    .select('*')
-    .eq('telegram_chat_id', chatId)
-    .order('first_seen_at', { ascending: false });
-  if (error) throw new Error(`Supabase error (getAllConversationsByTelegramChatId): ${error.message}`);
+  if (error) throw new Error(`Supabase error (getAllConversationsByCustomerId): ${error.message}`);
   return (data ?? []) as ConversationState[];
 }
 
@@ -152,6 +117,18 @@ export async function insertHistory(row: ConversationHistoryRow): Promise<void> 
 export async function insertScenarioContext(row: ScenarioContextRow): Promise<void> {
   const { error } = await supabase.from('scenario_context').insert(row);
   if (error) throw new Error(`Supabase error (insertScenarioContext): ${error.message}`);
+}
+
+// True if a customer message with this Support Chat messageId was already stored. Used to ignore
+// CrazyBet's at-least-once re-deliveries, including ones that arrive after a restart.
+export async function hasSupportChatMessage(messageId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('conversation_history')
+    .select('id')
+    .eq('metadata->>support_chat_message_id', messageId)
+    .limit(1);
+  if (error) throw new Error(`Supabase error (hasSupportChatMessage): ${error.message}`);
+  return (data ?? []).length > 0;
 }
 
 export async function getHistoryForConversation(conversationId: string): Promise<ConversationHistoryRow[]> {

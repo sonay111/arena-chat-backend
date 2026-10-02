@@ -1,152 +1,133 @@
 # Palig CX Tool
 
-TypeScript/Node backend for the CX support agent, replacing the n8n prototype.
-Polls a withdrawal-delay feed, drafts and sends customer messages over
-Telegram, and escalates to a human when needed.
+TypeScript/Node service for the CX support agent. It watches the delayed-withdrawal
+feed from `arena-chat-backend`, writes honest customer messages with Claude, sends
+them into the customer's **CrazyBet chat widget** (via the Support Chat API), and
+answers the customer's replies.
 
 ## Stack
 
 - TypeScript + Node.js + Express
-- Supabase (temporary DB; schema already exists, this service only reads/writes it)
-- OpenRouter (`anthropic/claude-sonnet-4.6`) for AI drafting — see "Swapping the AI provider" below
-- Telegram Bot API (temporary customer channel)
+- Supabase (conversation state, history, scenario context)
+- Anthropic API (Claude) for every customer-facing message and for translation
+- CrazyBet **Support Chat API**: the only customer channel (send + receive)
 
 ## Setup
 
 ```bash
 npm install
 cp .env.example .env
-# fill in .env with real values (see below), then:
+# fill in .env (see below), then:
 npm run dev
 ```
 
-Required env vars (the app refuses to start if any are missing — see
-`src/config.ts`):
+Required settings (the app refuses to start without them, see `src/config.ts`):
 
-- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` — service-role key, this runs server-side only
-- `OPENROUTER_API_KEY`
-- `TELEGRAM_BOT_TOKEN`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (service-role key, server-side only)
+- `ANTHROPIC_API_KEY`
 - `WITHDRAWAL_FEED_URL`
 
-Optional:
+Support Chat (needed to actually deliver messages):
 
-- `TEST_USER_IDS` — comma-separated `userId`s. When set, the poller only acts
-  on these customers. Leave blank in production.
-- `TEST_TELEGRAM_CHAT_ID` — fallback chat id used when a conversation has no
-  `telegram_chat_id` linked yet, so outbound messages have somewhere to land
-  while testing.
-- `PORT` (default `3000`), `POLL_INTERVAL_MINUTES` (default `2`)
+- `SUPPORT_CHAT_API_BASE_URL`, `SUPPORT_CHAT_API_KEY`, `SUPPORT_CHAT_TENANT_DOMAIN`
+- `SUPPORT_CHAT_SEND`: real sending happens only when this is exactly `true`.
+  Otherwise the agent only logs what it would send (dry run).
 
-## Wiring up the Telegram webhook
+Safety switches:
 
-Customer replies arrive as an inbound webhook at `POST /webhooks/telegram`.
-Once the server is reachable on a public HTTPS URL, register it with Telegram:
+- `TEST_USER_IDS`: comma-separated customer ids that may be messaged.
+- `SUPPORT_CHAT_ALLOW_ALL_CUSTOMERS`: when exactly `true`, any customer may be
+  messaged, so each withdrawal goes to its own owner. A customer that does not
+  exist in Support Chat is skipped with a warning.
+- `SUPPORT_CHAT_CUSTOMER_MAP`: optional `agentId:supportChatId` pairs, to reach a
+  customer under a different id (for testing).
+- `TEST_PAYMENT_IDS`: optional; when set, only these payment ids are acted on.
+- `GATEWAY_BROWSER_ALERTS`: the old demo that opens a browser and posts a
+  gateway alert; off unless exactly `true`.
 
-```bash
-curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://your-domain/webhooks/telegram"
-```
+Reminders:
+
+- `CHECKIN_INTERVAL_MINUTES` (default `15`) and `MAX_CHECKINS` (default `3`):
+  "still pending" reminders per withdrawal, then silence until the status changes.
+
+Other: `PORT` (default `3000`), `POLL_INTERVAL_SECONDS` (default `30`).
+
+## How customer replies arrive
+
+Customers write in the widget; Support Chat signs and delivers each message.
+Two doors are available (use the one that matches how Support Chat is configured):
+
+- `POST /support-chat/inbound`: for `arena-chat-backend`, which verifies the
+  platform's signature and forwards each message. Auth: `Authorization: Bearer <CX_AGENT_INBOUND_SECRET>`
+  (or header `x-cx-agent-secret`). Accepts CrazyBet's payload (`userId`, `body`,
+  `messageId`) or `{customerId, text}`.
+- `POST /support-chat/webhook`: Support Chat delivers straight to the agent.
+  Verified with `SUPPORT_CHAT_WEBHOOK_SECRET` (header `X-Arena365-Signature`).
+
+Both fail closed when their secret is not set, acknowledge immediately, ignore a
+repeated `messageId`, and let the agent write the reply in the background.
 
 ## Project layout
 
 ```
 src/
-  config.ts              env loading + validation
-  types.ts               DB row types (conversation_state, conversation_history, scenario_context)
-  db/
-    supabase.ts           Supabase client
-    conversations.ts      all DB reads/writes
+  config.ts                 env loading + validation
+  types.ts                  DB row types
+  db/                       Supabase client and all reads/writes
   ai/
-    client.ts              AIClient interface + OpenRouter implementation (swap point, see below)
-    drafts.ts               honesty rules + prompt building for every customer-facing message
-                             (first message, check-ins, resolution, replies)
+    client.ts               Anthropic client
+    drafts.ts               the agent's rules and prompt for every message
+    translate.ts            customer language <-> English
   channels/
-    telegram.ts            sendMessage + inbound update type
-  feed/
-    types.ts                withdrawal feed response shape
-    withdrawalFeed.ts        fetch + currency/payment-rail ETA classification
-  messages/
-    templates.ts            fixed copy for INTERNAL-ONLY audit notes (never sent to the customer)
+    supportChat.ts          send to the customer's widget (dry run, allowlist, id mapping)
+  inbound/
+    handleCustomerMessage.ts  read a reply, find the withdrawal, answer
+  feed/                     withdrawal feed, gateway health
+  messages/templates.ts     fixed copy for clarifying questions
   orchestrator/
-    poll.ts                  the 2-minute poll cycle: new withdrawals, check-ins, resolution detection
+    poll.ts                 poll cycle: new withdrawals, reminders, resolution
+    checkinPolicy.ts        when a reminder is due and what it may promise
   routes/
-    webhookRoutes.ts          inbound customer replies
-    humanRoutes.ts             take-control / release-control / link-telegram
+    supportChatInbound.ts   door for the backend's forwarder
+    supportChatWebhook.ts   door for Support Chat's own webhook
+    humanRoutes.ts          take-control / release-control (legacy)
+    conversationRoutes.ts   read access for dashboards
   server.ts, index.ts
 ```
 
-## Swapping the AI provider
+## Core flow
 
-`src/ai/client.ts` defines an `AIClient` interface with one method,
-`complete(messages, opts)`. Every other file calls that interface, never
-OpenRouter directly. To move to the direct Anthropic API later: rewrite the
-class in that one file to use `@anthropic-ai/sdk` with the same method
-signature, and repoint the `aiClient` export. No other file changes.
+1. **Poll** the feed every `POLL_INTERVAL_SECONDS`.
+2. **New withdrawal** (a `paymentId` not yet in `conversation_state`): create the
+   conversation, write a first message with Claude, send it to the customer's
+   widget, record it.
+3. **Reminders:** while still pending, a reminder every `CHECKIN_INTERVAL_MINUTES`,
+   at most `MAX_CHECKINS`. The agent only mentions a next check if one will happen.
+4. **Resolution:** when a withdrawal leaves the feed or changes status, the agent
+   tells the customer the honest outcome and marks the conversation resolved.
+5. **Replies:** the customer's message is translated, saved, answered by the agent,
+   and the answer is saved. There is no human gate: the agent answers every reply.
 
-## Core flow (as implemented)
+## Wording rules (in `src/ai/drafts.ts`)
 
-1. **Poll** `WITHDRAWAL_FEED_URL` every `POLL_INTERVAL_MINUTES` (`src/orchestrator/poll.ts`).
-2. **New withdrawal** (a `paymentId` never seen in `conversation_state` before):
-   creates `conversation_state` + `scenario_context`, and:
-   - if the withdrawal is already >10 min old (by `createdAt`) when first
-     detected, skips straight to `human_required` — no first message is sent,
-     an internal `system` note is logged instead.
-   - otherwise, AI drafts a first message (1-2 sentences, <35 words, honest
-     about not knowing the cause, ETA only for fiat currencies), sends it via
-     Telegram if a `telegram_chat_id` is linked, and logs it either way.
-3. **Check-in loop** (status `autonomous`/`monitoring`, not taken over): if
-   10+ min since `agent_last_message_at` and the payment is still pending,
-   AI drafts and sends check-in #1 (under 25 words, flips status to
-   `monitoring`), then check-in #2 ten minutes later, then escalates to
-   `human_required` (no more automatic messages) ten minutes after that if
-   still unresolved.
-4. **Resolution detection**: every poll, any open conversation (`status !=
-   resolved`) whose `payment_id` has dropped out of the feed gets an
-   AI-drafted, honest "no longer showing as pending, confirming the outcome"
-   message (never claiming success) and is marked `resolved`. If a human has
-   taken control, this is logged internally instead of auto-messaging the
-   customer (see note below).
-5. **Inbound replies** (`POST /webhooks/telegram`): always logged. AI only
-   replies if `taken_over_by` is null **and** status isn't `human_required`;
-   otherwise the message is logged and left for the human.
-6. **Take Control** (`POST /human/take-control`): logs a `human_agent`
-   message, sends it directly via Telegram (no AI), sets `taken_over_by`.
-7. **Release Control** (`POST /human/release-control`): clears
-   `taken_over_by`, and marks `resolved` too if `mark_resolved: true` is
-   passed. Note: if status was `human_required` and `mark_resolved` isn't
-   passed, it stays `human_required` after release (per the gate in point 5,
-   that keeps the AI out until someone deliberately changes status) —
-   intentional, not a bug.
+The agent must not: state a status other than the real one, give any timeframe
+unless one is verified (there is none yet), say where the money is or that it is
+safe, promise a recurring check schedule, invent reasons, or mention internal
+details. `src/ai/wording-rules.test.ts` guards the key rules.
 
-## Assumptions and open items (flagged, not silently guessed)
+## Tests
 
-- **Feed shape**: parsed from a real sample payload you provided
-  (`{ alerts: [{ paymentId, userId, amount, currency, createdAt, player: {
-  identity, recentWithdrawals } }] }`). See `src/feed/types.ts`.
-- **Currency → ETA classification** (`src/feed/withdrawalFeed.ts`,
-  `getEtaText`): fiat currencies `INR/USD/EUR/GBP` get "1-2 business days";
-  everything else (crypto tickers, or a matching `recentWithdrawals` entry
-  with `paymentMethod` of `crypto`/`upi`/`e-wallet`/`wallet`) gets no
-  timeframe. This is the one function to edit if the real vocabulary differs.
-- **Telegram linking gap**: nothing in the feed carries a `telegram_chat_id`.
-  New conversations only get one by copying it from an earlier conversation
-  for the same `customer_id`. The very first link for a customer has to be
-  established some other way — I added a minimal `POST
-  /human/link-telegram` endpoint for this (not in the original spec, easy to
-  remove if you handle linking differently, e.g. a `/start` deep link).
-- **Unmatched inbound Telegram messages**: if a chat id matches no open
-  conversation, the message is logged to the server console and dropped —
-  the current schema has no fallback table to persist it against.
-- **Resolution message vs. an active human takeover**: chose not to
-  auto-message the customer when `taken_over_by` is set, even if the payment
-  disappears from the feed — logs an internal note for the human instead, so
-  automation doesn't talk over a human mid-conversation. Flag if you'd rather
-  it always messages the customer.
-- **Every customer-facing message is AI-drafted** through `aiClient.complete`
-  (`src/ai/drafts.ts`: `draftFirstMessage`, `draftCheckin`, `draftResolution`,
-  `draftReply`), each with its own system prompt carrying the honesty rules,
-  the ETA rule, and its length constraint (35 words for the first message, 25
-  for check-ins, 1-2 short sentences for resolution and replies).
-  `src/messages/templates.ts` now only holds fixed copy for internal `system`-role
-  audit notes (escalation, taken-over-resolution) that are never sent to the
-  customer — those don't need a model call since no one reads them as support
-  copy.
+```bash
+npm test
+```
+
+## Notes and open items
+
+- **Telegram was removed.** The `telegram_chat_id` column still exists in the
+  Supabase `conversation_state` table but nothing reads or writes it.
+- `humanRoutes.ts` (take-control / release-control) is legacy; the agent does not
+  depend on it.
+- The poll cycle re-checks every previously resolved conversation each time; worth
+  limiting to open or recently resolved ones.
+- `ConversationRole` in `src/types.ts` lacks `'human_agent'`, which `humanRoutes.ts`
+  uses (type error in `tsc`).
