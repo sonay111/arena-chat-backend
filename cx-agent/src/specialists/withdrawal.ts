@@ -21,6 +21,7 @@ import { draftAgentMessage, WithdrawalStatus } from '../ai/drafts';
 import { shouldCheckIn, nextCheckInMinutes } from '../orchestrator/checkinPolicy';
 import { resolvedWhileTakenOverNote } from '../messages/templates';
 import { logAndMaybeSend, getRecentHistory } from './shared';
+import { hasCustomerEndedChatSince, toSupportChatUserId } from '../channels/supportChat';
 import type { Case, DispatchContext, Specialist } from '../dispatcher/types';
 
 // The Withdrawal & Cashier specialist: delayed withdrawals. The functions below were moved,
@@ -114,6 +115,17 @@ async function handleNewWithdrawal(alert: FeedAlert, now: Date, allAlerts: FeedA
     }
   }
 
+  await sendFirstPendingMessage(conversation, matched, etaText, has_multiple_open_withdrawals, now);
+}
+
+/** Writes and sends the first "we've seen your pending withdrawal" message. Returns whether one was sent. */
+async function sendFirstPendingMessage(
+  conversation: ConversationState,
+  matched: ReturnType<typeof findMatchingWithdrawal>,
+  etaText: string | null,
+  has_multiple_open_withdrawals: boolean,
+  now: Date
+): Promise<boolean> {
   const initialProgressNote = isApprovedSubmittedRemark(matched?.remark) ? APPROVED_SUBMITTED_PROGRESS_NOTE : null;
 
   const output = await draftAgentMessage({
@@ -140,6 +152,7 @@ async function handleNewWithdrawal(alert: FeedAlert, now: Date, allAlerts: FeedA
       agent_last_message_at: now.toISOString(),
     });
   }
+  return output.send;
 }
 
 async function handleResolved(convo: ConversationState, allAlerts: FeedAlert[]): Promise<void> {
@@ -262,6 +275,18 @@ async function maybeCheckin(convo: ConversationState, now: Date): Promise<void> 
     (now.getTime() - new Date(convo.agent_last_message_at).getTime()) / 60000;
   if (!shouldCheckIn(convo.checkin_count, minutesSinceLastMessage)) return;
 
+  // A customer who ended their chat does not want to be interrupted: no reminder. (If they write
+  // again, their newest chat is open and reminders can resume.) If we cannot tell, skip this one.
+  try {
+    if (convo.first_seen_at && (await hasCustomerEndedChatSince(toSupportChatUserId(convo.customer_id), new Date(convo.first_seen_at)))) {
+      console.log(`withdrawal: payment_id=${convo.payment_id} no reminder: the customer ended their chat`);
+      return;
+    }
+  } catch (err) {
+    console.warn(`withdrawal: payment_id=${convo.payment_id} could not check whether the customer ended the chat, skipping this reminder`, err);
+    return;
+  }
+
   const [scenario, history, openCount] = await Promise.all([
     getScenarioContext(convo.conversation_id),
     getRecentHistory(convo.conversation_id),
@@ -293,6 +318,49 @@ async function maybeCheckin(convo: ConversationState, now: Date): Promise<void> 
       status: 'monitoring',
       agent_last_message_at: now.toISOString(),
     });
+  }
+}
+
+/**
+ * A conversation that was opened but never got its first message (for example the AI call failed
+ * right after the record was created). Without this, the dispatcher treats the withdrawal as
+ * already handled and the customer hears nothing until its status changes.
+ */
+export function needsFirstMessage(
+  convo: Pick<ConversationState, 'status' | 'agent_last_message_at' | 'pending_update_count'>
+): boolean {
+  return (
+    (convo.status === 'autonomous' || convo.status === 'monitoring') &&
+    !convo.agent_last_message_at &&
+    convo.pending_update_count === 0
+  );
+}
+
+// Limits the retries per conversation (per run), so a persistent AI problem cannot loop forever.
+const MAX_FIRST_MESSAGE_ATTEMPTS = 5;
+const firstMessageAttempts = new Map<string, number>();
+
+async function recoverFirstMessage(convo: ConversationState, alert: FeedAlert, now: Date): Promise<void> {
+  const attempt = (firstMessageAttempts.get(convo.conversation_id) ?? 0) + 1;
+  if (attempt > MAX_FIRST_MESSAGE_ATTEMPTS) return;
+  firstMessageAttempts.set(convo.conversation_id, attempt);
+
+  console.warn(
+    `withdrawal: payment_id=${convo.payment_id} was opened but has no first message yet, retrying (attempt ${attempt}/${MAX_FIRST_MESSAGE_ATTEMPTS})`
+  );
+  const [scenario, openCount] = await Promise.all([
+    getScenarioContext(convo.conversation_id),
+    countOpenConversationsForCustomer(convo.customer_id),
+  ]);
+  const sent = await sendFirstPendingMessage(
+    convo,
+    findMatchingWithdrawal(alert),
+    scenario?.eta_text ?? null,
+    openCount > 1,
+    now
+  );
+  if (!sent) {
+    console.error(`withdrawal: payment_id=${convo.payment_id} the agent produced no first message (attempt ${attempt})`);
   }
 }
 
@@ -358,6 +426,8 @@ async function followUpWithdrawal(
     await handleResolved(convo, alerts);
   } else if (progressTransition) {
     await sendProgressUpdate(convo);
+  } else if (needsFirstMessage(convo) && feedAlert) {
+    await recoverFirstMessage(convo, feedAlert, now);
   } else {
     await maybeCheckin(convo, now);
   }

@@ -82,6 +82,8 @@ src/
     supportChat.ts          send to the customer's widget (dry run, allowlist, id mapping)
   inbound/
     handleCustomerMessage.ts  read a reply, find the withdrawal, answer
+  catchup/
+    catchUp.ts              looks at open customers' chats and answers messages the agent has not handled
   dispatcher/
     dispatcher.ts           plain-code loop: collect problems, follow up, open each new one once
     types.ts                Case and Specialist: the shared vocabulary
@@ -112,13 +114,22 @@ code, no AI) runs every `POLL_INTERVAL_SECONDS`:
    cycle, so nothing is wrongly reported as resolved.
 2. **Follow up** each existing conversation with the specialist that owns its `category`:
    reminders every `CHECKIN_INTERVAL_MINUTES` (at most `MAX_CHECKINS`), and the honest
-   outcome when the withdrawal leaves the feed or changes status.
+   outcome when the withdrawal leaves the feed or changes status. A conversation that was
+   opened but never got its first message (for example the AI call failed) is retried, at
+   most 5 times per run. If the customer **ended their chat**, reminders stop (the outcome
+   message and replies still go out; if they write again, reminders can resume).
 3. **Open** each genuinely new problem once: the specialist writes the first message with
    Claude, it is sent to the customer's widget, and recorded. A new kind of problem for a
    customer who was just messaged about something else waits
    `DISPATCH_CROSS_TYPE_COOLDOWN_MINUTES`; the same kind is never delayed.
 4. **Replies:** the customer's message is translated, saved, answered by the agent, and the
    answer is saved. There is no human gate: the agent answers every reply.
+5. **Catch-up** (own timer, every `CATCHUP_INTERVAL_SECONDS`, default 60; 0 = off): the
+   backend's forwarder does not retry, so the agent also reads the open chats of customers it
+   has an open withdrawal for, and answers any customer message it has not handled (written
+   after the withdrawal began, within 24 hours, at most 3 per customer per pass). It works
+   even when the backend is down. A message is never answered twice. It looks only at **open**
+   chats: a message in a chat the customer already ended is not answered.
 
 Adding a new kind of problem = a new specialist (one file in `src/specialists/`, registered
 in `orchestrator/poll.ts`) with its own signal and its own verified facts.

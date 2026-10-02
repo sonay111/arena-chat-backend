@@ -17,6 +17,7 @@ import {
 } from '../messages/templates';
 import { canMessageCustomer, sendToCustomer, toCustomerId } from '../channels/supportChat';
 import { ConversationState } from '../types';
+import { messageGuard } from './inFlight';
 
 // A customer wrote in the CBTF widget: work out which withdrawal they mean,
 // translate + store their message, draft a reply with the AI agent, send it,
@@ -119,7 +120,7 @@ async function resolveConversation(
   return null;
 }
 
-export async function handleCustomerMessage({ customerId: supportChatUserId, text, messageId }: InboundCustomerMessage): Promise<void> {
+async function processCustomerMessage({ customerId: supportChatUserId, text, messageId }: InboundCustomerMessage): Promise<void> {
   // The webhook carries the Support Chat (CrazyBet) user id; conversations are
   // stored under the agent's own id. Same id unless SUPPORT_CHAT_CUSTOMER_MAP maps them.
   const customerId = toCustomerId(supportChatUserId);
@@ -201,5 +202,18 @@ export async function handleCustomerMessage({ customerId: supportChatUserId, tex
       escalation_flagged: true,
       escalation_reason: output.escalation_reason,
     });
+  }
+}
+
+export async function handleCustomerMessage(message: InboundCustomerMessage): Promise<void> {
+  const id = message.messageId;
+  if (id && !messageGuard.tryAcquire(id)) {
+    console.log(`inbound: message ${id} is already being handled — ignoring the duplicate`);
+    return;
+  }
+  try {
+    await processCustomerMessage(message);
+  } finally {
+    if (id) messageGuard.release(id);
   }
 }

@@ -90,3 +90,63 @@ export async function sendToCustomer(
   }
   return true;
 }
+
+export type SupportChatCustomerMessage = { id: string; body: string; createdAt: string };
+
+async function supportChatGet(path: string): Promise<any> {
+  const { supportChatApiBaseUrl: base, supportChatApiKey: key, supportChatTenantDomain: tenant } = config;
+  if (!base || !key || !tenant) {
+    throw new Error('SUPPORT_CHAT_API_BASE_URL / SUPPORT_CHAT_API_KEY / SUPPORT_CHAT_TENANT_DOMAIN are not all set.');
+  }
+  const res = await fetch(`${base.replace(/\/$/, '')}${path}`, {
+    headers: { Authorization: `Bearer ${key}`, 'x-tenant-domain': tenant },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`Support Chat GET ${path.split('?')[0]} failed: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+/**
+ * The customer's own most recent messages from their open Support Chat conversation (read only).
+ * Used to catch customer messages that never reached the agent, for example because the
+ * backend's forwarder was down. Returns [] when the customer has no open conversation.
+ */
+export async function fetchRecentCustomerMessages(supportChatUserId: string, limit = 10): Promise<SupportChatCustomerMessage[]> {
+  const conversations = await supportChatGet(`/users/${encodeURIComponent(supportChatUserId)}/conversations`);
+  const liveId: string | undefined = conversations?.data?.liveConversationId;
+  if (!liveId) return [];
+
+  const thread = await supportChatGet(`/conversations/${encodeURIComponent(liveId)}/messages?limit=${limit}`);
+  const messages: any[] = thread?.data?.messages ?? [];
+  return messages
+    .filter((m) => m?.sender === 'customer' && typeof m.id === 'string' && typeof m.body === 'string' && m.body.trim() !== '')
+    .map((m) => ({ id: m.id as string, body: m.body as string, createdAt: m.createdAt as string }));
+}
+
+export type SupportChatConversationInfo = {
+  status?: string;
+  endedAt?: string | null;
+  endedBy?: string | null;
+};
+
+/**
+ * Did the customer end their most recent chat on or after `since`? The API lists conversations
+ * newest first. Ending a chat is a clear signal that the customer does not want to be interrupted,
+ * so the agent stops its reminders (the outcome message and replies to the customer still go out).
+ */
+export function customerEndedChat(conversationsNewestFirst: SupportChatConversationInfo[], since: Date): boolean {
+  const newest = conversationsNewestFirst[0];
+  if (!newest) return false;
+  return (
+    newest.status === 'closed' &&
+    newest.endedBy === 'customer' &&
+    !!newest.endedAt &&
+    new Date(newest.endedAt).getTime() >= since.getTime()
+  );
+}
+
+/** Reads the customer's conversations from Support Chat and applies customerEndedChat (read only). */
+export async function hasCustomerEndedChatSince(supportChatUserId: string, since: Date): Promise<boolean> {
+  const result = await supportChatGet(`/users/${encodeURIComponent(supportChatUserId)}/conversations`);
+  return customerEndedChat(result?.data?.conversations ?? [], since);
+}

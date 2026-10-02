@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/channels/*.test.ts src/routes/*.test.ts src/pending-withdrawal/*.test.ts src/feed/*.test.ts src/ai/*.test.ts src/orchestrator/*.test.ts src/dispatcher/*.test.ts src/specialists/*.test.ts"
+    "test": "tsx --test src/channels/*.test.ts src/routes/*.test.ts src/pending-withdrawal/*.test.ts src/feed/*.test.ts src/ai/*.test.ts src/orchestrator/*.test.ts src/dispatcher/*.test.ts src/specialists/*.test.ts src/catchup/*.test.ts src/inbound/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",

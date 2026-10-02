@@ -1,6 +1,7 @@
 import { config } from './config';
 import { createServer } from './server';
 import { runPollCycle } from './orchestrator/poll';
+import { startCatchUp } from './catchup/catchUp';
 
 async function main(): Promise<void> {
   const app = createServer();
@@ -17,6 +18,9 @@ async function main(): Promise<void> {
       console.error('Poll cycle failed', err);
     }
   };
+
+  // Own timer, so a customer's message is still answered when the withdrawal poll cannot run.
+  startCatchUp();
 
   await tick();
   setInterval(tick, intervalMs);

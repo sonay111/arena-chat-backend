@@ -36,6 +36,6 @@ export function askForReferenceIdClarification(): string {
 export function noRecordFoundNote(): string {
   return [
     "I don't have a record of a withdrawal matching this on my end.",
-    "I've flagged this for a member of the team to look into directly — if you have a reference number handy, feel free to share it and I can take another look.",
+    "If you have a reference number handy, feel free to share it and I can take another look.",
   ].join(' ');
 }

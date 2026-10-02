@@ -79,4 +79,9 @@ export const config = {
 
   port: Number(optionalEnv('PORT') ?? '3000'),
   pollIntervalSeconds: Number(optionalEnv('POLL_INTERVAL_SECONDS') ?? '30'),
+  // How often the catch-up looks at open customers' chats for unhandled messages. 0 = off.
+  catchupIntervalSeconds: (() => {
+    const n = Number(optionalEnv('CATCHUP_INTERVAL_SECONDS') ?? '60');
+    return Number.isFinite(n) && n >= 0 ? n : 60;
+  })(),
 } as const;
